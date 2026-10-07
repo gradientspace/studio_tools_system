@@ -1,0 +1,9 @@
+{
+  "id": "{{PACK_ID}}",
+  "name": "{{PACK_NAME}}",
+  "version": "0.1.0",
+  "apiVersion": {{API_VERSION}},
+  "tab": "Core",
+  "description": "",
+  "source": "src"
+}

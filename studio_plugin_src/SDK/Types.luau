@@ -1,0 +1,183 @@
+--[[
+	Type definitions for the tool contract (API version 1). Types only; this
+	module returns an empty table. Re-exported from the SDK module, and
+	copied into each tool pack's generated SDK.luau by `npm run export-sdk`,
+	so it must stay self-contained (no requires).
+]]
+
+export type SettingSchema = {
+	key: string,
+	label: string?,
+	type: "number" | "boolean" | "color" | "enum",
+	default: any,
+	-- number
+	min: number?,
+	max: number?,
+	step: number?,
+	-- enum
+	options: { string }?,
+	-- color
+	presets: { Color3 }?,
+}
+
+export type UndoAction = "Undo" | "Redo"
+
+export type UndoRecording = {
+	commit: () -> (),
+	cancel: () -> (),
+}
+
+export type ToolContext = {
+	plugin: Plugin,
+	mouse: PluginMouse,
+	toolId: string, -- "<packId>/<toolId>"
+	definition: any,
+	settings: { [string]: any },
+	state: { [any]: any },
+
+	addCleanup: <T>(self: ToolContext, task: T) -> T,
+	connect: (self: ToolContext, signal: RBXScriptSignal, fn: (...any) -> ()) -> RBXScriptConnection,
+
+	onMouseMove: (self: ToolContext, fn: () -> ()) -> RBXScriptConnection,
+	onMouseDown: (self: ToolContext, fn: () -> ()) -> RBXScriptConnection,
+	onMouseUp: (self: ToolContext, fn: () -> ()) -> RBXScriptConnection,
+	isKeyDown: (self: ToolContext, ...Enum.KeyCode) -> boolean,
+	isShiftDown: (self: ToolContext) -> boolean,
+	onKey: (self: ToolContext, fn: (InputObject, boolean) -> ()) -> (),
+	onSettingChanged: (self: ToolContext, fn: (string, any) -> ()) -> any,
+	-- fn(action, waypointName) after the user undoes or redoes while the tool is active.
+	onUndoRedo: (self: ToolContext, fn: (UndoAction, string) -> ()) -> (),
+
+	excludeFromRaycast: (self: ToolContext, instance: Instance) -> (),
+	raycast: (self: ToolContext, maxDistance: number?, extraExclude: { Instance }?) -> RaycastResult?,
+	partUnderMouse: (self: ToolContext) -> (BasePart?, RaycastResult?),
+
+	-- Shows a confirmation dialog in the viewport and waits for the answer
+	-- (yields). Escape, or the tool being shut down, answers false.
+	confirm: (self: ToolContext, options: ConfirmOptions) -> boolean,
+	-- Re-queries canAccept() now instead of waiting for the next poll.
+	refreshShutdownButtons: (self: ToolContext) -> (),
+
+	createBoxPreview: (self: ToolContext) -> BoxHandleAdornment,
+	createHighlight: (self: ToolContext, color: Color3?) -> SelectionBox,
+
+	beginUndo: (self: ToolContext, name: string) -> UndoRecording,
+	recordUndo: (self: ToolContext, name: string, fn: (...any) -> ...any, ...any) -> (boolean, any),
+
+	log: (self: ToolContext, ...any) -> (),
+}
+
+-- Which buttons the system's shutdown overlay shows while the tool is active.
+export type ShutdownType = "Done" | "AcceptCancel"
+
+-- Passed to Tool:deactivate(ctx, reason): why the tool is shutting down.
+-- "Force" means the user didn't pick a button: another tool was chosen,
+-- Studio switched tools, the plugin is unloading, or activation failed.
+export type ShutdownReason = "Done" | "Accept" | "Cancel" | "Force"
+
+-- What started a user-initiated shutdown (passed to confirmShutdown).
+export type ShutdownTrigger = "Button" | "Escape"
+
+-- Options for ctx:confirm().
+export type ConfirmOptions = {
+	title: string?,
+	message: string,
+	confirmText: string?, -- default "OK"
+	cancelText: string?, -- default "Cancel"
+}
+
+export type ShutdownButton = {
+	text: string?,
+	tooltip: string?,
+}
+
+export type ShutdownOptions = {
+	type: ShutdownType?, -- default "Done"
+	done: ShutdownButton?, -- used when type is "Done"
+	accept: ShutdownButton?, -- used when type is "AcceptCancel"
+	cancel: ShutdownButton?, -- used when type is "AcceptCancel"
+}
+
+export type ToolDefinition = {
+	-- Studio Tools API version this tool was written against. Required.
+	apiVersion: number,
+	-- Unique within the pack; stable (saved settings are keyed on it). Required.
+	id: string,
+	-- Shown in the palette. Required.
+	name: string,
+	description: string?,
+	-- The tool's own version, informational.
+	version: string?,
+	-- Palette sort order within the pack.
+	order: number?,
+	-- Base classes under Tools/ set this so they aren't listed. Not inherited.
+	abstract: boolean?,
+	settings: { SettingSchema }?,
+	-- Shutdown overlay configuration; read by the default getShutdownOptions().
+	shutdown: ShutdownOptions?,
+
+	activate: (self: any, ctx: ToolContext) -> (),
+	deactivate: (self: any, ctx: ToolContext, reason: ShutdownReason) -> (),
+	-- Called right after activate(). Override for options that depend on state.
+	getShutdownOptions: (self: any) -> ShutdownOptions,
+	-- Called before a user-initiated shutdown (button or Escape, not Force).
+	-- May yield, e.g. for ctx:confirm(). Return false to keep the tool running.
+	confirmShutdown: (self: any, reason: ShutdownReason, trigger: ShutdownTrigger) -> boolean,
+	-- Polled while an Accept/Cancel tool is active. Return false (and
+	-- optionally a reason, shown as the button's tooltip) to disable Accept.
+	canAccept: (self: any) -> (boolean, string?),
+}
+
+export type Connection = {
+	Disconnect: (self: Connection) -> (),
+}
+
+export type Signal = {
+	connect: (self: Signal, fn: (...any) -> ()) -> Connection,
+	fire: (self: Signal, ...any) -> (),
+	destroy: (self: Signal) -> (),
+}
+
+export type Maid = {
+	add: <T>(self: Maid, task: T) -> T,
+	clean: (self: Maid) -> (),
+	destroy: (self: Maid) -> (),
+}
+
+-- The SDK.Tool base class. extend() returns the new class (typed loosely, so
+-- annotate methods yourself, e.g. `function MyTool:activate(ctx: SDK.ToolContext)`).
+export type ToolClass = {
+	extend: (self: any, definition: { [string]: any }?) -> any,
+	isSubclass: (value: any) -> boolean,
+	activate: (self: any, ctx: ToolContext) -> (),
+	deactivate: (self: any, ctx: ToolContext, reason: ShutdownReason) -> (),
+	getShutdownOptions: (self: any) -> ShutdownOptions,
+	confirmShutdown: (self: any, reason: ShutdownReason, trigger: ShutdownTrigger) -> boolean,
+	canAccept: (self: any) -> (boolean, string?),
+}
+
+-- The SDK module itself.
+export type SDK = {
+	API_VERSION: number,
+	MIN_API_VERSION: number,
+	isApiVersionSupported: (apiVersion: any) -> boolean,
+	Tool: ToolClass,
+	ShutdownType: { Done: ShutdownType, AcceptCancel: ShutdownType },
+	ShutdownReason: { Done: ShutdownReason, Accept: ShutdownReason, Cancel: ShutdownReason, Force: ShutdownReason },
+	ShutdownTrigger: { Button: ShutdownTrigger, Escape: ShutdownTrigger },
+	Maid: { new: () -> Maid },
+	Signal: { new: () -> Signal },
+}
+
+-- Pack metadata from toolpack.json, as delivered by the server.
+export type PackManifest = {
+	id: string,
+	name: string,
+	version: string,
+	apiVersion: number,
+	description: string,
+	tab: string, -- palette tab the pack's tools appear in (default "Core")
+	origin: string,
+}
+
+return {}

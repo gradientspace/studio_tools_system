@@ -1,0 +1,5 @@
+{
+  "packs": [
+    { "path": "toolpacks/core" }
+  ]
+}

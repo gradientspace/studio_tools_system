@@ -1,0 +1,21 @@
+{
+  "name": "studio-tools-system",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hot-reloadable interactive tools framework for Roblox Studio",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gradientspace/studio_tools_system.git"
+  },
+  "scripts": {
+    "start": "node server/server.js",
+    "install-plugin": "node scripts/install-plugin.js",
+    "sync-packs": "node scripts/sync-packs.js",
+    "check": "node scripts/check.js",
+    "export-sdk": "node scripts/export-sdk.js",
+    "new-pack": "node scripts/new-pack.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
