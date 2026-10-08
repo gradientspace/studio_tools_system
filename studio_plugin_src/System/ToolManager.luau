@@ -122,7 +122,9 @@ local function sortTools(entries: { any })
 	end)
 end
 
-function ToolManager.new(host: any, packsFolder: Instance?)
+-- options.isInputBlocked: optional extra check for viewport UI outside the
+-- ViewportOverlay (e.g. the chat box) that should swallow tool clicks.
+function ToolManager.new(host: any, packsFolder: Instance?, options: any?)
 	local self = setmetatable({}, ToolManager)
 	self.host = host
 	self.plugin = host.plugin :: Plugin
@@ -141,6 +143,7 @@ function ToolManager.new(host: any, packsFolder: Instance?)
 	self._maid = Maid.new()
 	self._maid:add(self.changed)
 	self.overlay = self._maid:add(ViewportOverlay.new())
+	self._extraInputBlocked = options and options.isInputBlocked
 
 	local build = host.build or {}
 	self:_loadPacks(packsFolder, build.packs or {}, build.failedPacks or {})
@@ -262,7 +265,7 @@ function ToolManager:activate(id: string)
 	local ctx
 	ctx = ToolContext.new(self.host, entry, self.store:get(entry), {
 		isInputBlocked = function()
-			return self.overlay:isBlockingInput()
+			return self.overlay:isBlockingInput() or (self._extraInputBlocked ~= nil and self._extraInputBlocked())
 		end,
 		confirm = function(options)
 			return self.overlay:confirm(options)

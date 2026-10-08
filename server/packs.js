@@ -13,6 +13,7 @@
 //
 // See docs/TOOLPACKS.md for the pack contract.
 
+require("./env").loadEnv();
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");

@@ -2,6 +2,7 @@
 // plus each tool pack's source under Packs/<packId>/. Shared by the dev
 // server, `npm run check` and `npm run export-sdk`.
 
+require("./env").loadEnv();
 const fs = require("node:fs");
 const path = require("node:path");
 

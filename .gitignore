@@ -5,3 +5,5 @@ node_modules/
 .tools/
 logs/
 toolpacks.local.json
+.chat/
+.env

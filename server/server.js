@@ -15,15 +15,25 @@
 //                              until a change happens or the timeout expires.
 //   POST /log               <- { build, entries: [{ kind, message }] } from the
 //                              plugin: Studio output mentioning StudioTools.
+//   POST /chat              <- { message }: send a message to the Tools Agent (see chat.js;
+//                              the coding agent behind it is set in .env)
+//   GET  /chat/poll         -> conversation updates (long-poll)
+//   POST /chat/stop, POST /chat/reset
+//
+// Security: requests must address the server as localhost (blocks DNS
+// rebinding), and POSTs must carry an `X-Studio-Tools: 1` header, which a web
+// page can't add to a cross-site request (so websites can't drive the chat).
 //
 // Server events and Studio output are both written to logs/studio-tools.log
 // (truncated on start), so agents can follow what happens in Studio.
 
+require("./env").loadEnv(); // before anything reads process.env
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const packs = require("./packs");
+const chat = require("./chat");
 const { REPO_ROOT, SRC_DIR, treeFiles } = require("./tree");
 
 const PORT = Number(process.env.PORT) || 34873;
@@ -191,16 +201,45 @@ function versionInfo() {
   return { version: bundle.version, hash: bundle.hash };
 }
 
-function handleRequest(req, res) {
-  const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+const ALLOWED_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
-  if (req.method === "POST" && url.pathname === "/log") {
-    return readJsonBody(req, 1024 * 1024, (err, body) => {
+function isAllowedHost(req) {
+  const hostname = (req.headers.host || "").replace(/:\d+$/, "").toLowerCase();
+  return ALLOWED_HOSTNAMES.has(hostname);
+}
+
+function handlePost(req, res, url) {
+  if (req.headers["x-studio-tools"] !== "1") return sendJson(res, 403, { error: "missing X-Studio-Tools header" });
+
+  const withBody = (handler) =>
+    readJsonBody(req, 1024 * 1024, (err, body) => {
       if (err) return sendJson(res, 400, { error: "invalid JSON" });
-      logStudio(body);
-      sendJson(res, 200, { ok: true });
+      handler(body || {});
     });
+  const reply = (result) => sendJson(res, result.status, result.body);
+
+  switch (url.pathname) {
+    case "/log":
+      return withBody((body) => {
+        logStudio(body);
+        sendJson(res, 200, { ok: true });
+      });
+    case "/chat":
+      return withBody((body) => reply(chat.start(body.message)));
+    case "/chat/stop":
+      return reply(chat.stop());
+    case "/chat/reset":
+      return reply(chat.reset());
+    default:
+      return sendJson(res, 404, { error: "not found" });
   }
+}
+
+function handleRequest(req, res) {
+  if (!isAllowedHost(req)) return sendJson(res, 403, { error: "forbidden host" });
+  const url = new URL(req.url, "http://localhost");
+
+  if (req.method === "POST") return handlePost(req, res, url);
   if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
 
   switch (url.pathname) {
@@ -212,6 +251,7 @@ function handleRequest(req, res) {
         config: packs.CONFIG_PATHS,
         logFile: LOG_PATH,
         packs: bundle.packs,
+        agent: chat.agentName(),
         ...versionInfo(),
       });
 
@@ -220,6 +260,9 @@ function handleRequest(req, res) {
 
     case "/bundle":
       return sendJson(res, 200, bundle);
+
+    case "/chat/poll":
+      return chat.poll(req, res, url, sendJson);
 
     case "/poll": {
       const since = url.searchParams.get("since") || "";
@@ -264,6 +307,13 @@ for (const configPath of packs.CONFIG_PATHS) {
 
 log(`Framework: ${SRC_DIR}`);
 log(`Log file: ${LOG_PATH}`);
+chat.init({ log });
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    chat.shutdown();
+    process.exit(0);
+  });
+}
 log(`Pack config: ${packs.CONFIG_PATHS.join(" + ")}`);
 rebuild();
 for (const host of HOSTS) {

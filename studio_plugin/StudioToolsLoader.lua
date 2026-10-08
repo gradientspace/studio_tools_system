@@ -604,7 +604,16 @@ task.spawn(function()
 				entries = entries,
 			})
 			-- Failures are dropped silently: anything printed here would be forwarded again.
-			pcall(HttpService.PostAsync, HttpService, serverUrl .. "/log", body, Enum.HttpContentType.ApplicationJson)
+			pcall(
+				HttpService.PostAsync,
+				HttpService,
+				serverUrl .. "/log",
+				body,
+				Enum.HttpContentType.ApplicationJson,
+				false,
+				-- Required by the server for POSTs (keeps web pages from posting to it).
+				{ ["X-Studio-Tools"] = "1" }
+			)
 		end
 	end
 end)

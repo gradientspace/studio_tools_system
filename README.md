@@ -58,6 +58,21 @@ Because every module is required during validation, **modules should not have si
 
 State that should survive a hot reload can be kept in `host.persist` (a plain table owned by the loader). Tool settings are persisted with `plugin:SetSetting` and survive Studio restarts.
 
+## Tools Agent chat in Studio
+
+The **Tools Agent** button at the bottom-left of the viewport opens a chat box connected to a headless coding agent that the dev server runs in this repo. The agent is [Claude Code](https://claude.com/claude-code) by default, or Codex; Studio doesn't know or care which. Type a request ("make Place Block's default size 8") and press Enter.
+- **What the agent does:** it edits the framework or local packs and runs `npm run check`. The server then hot-reloads the change into Studio.
+- **Default view:** just the entry field and a one-line preview of the latest reply or current activity. **History** expands the full conversation, with a **New chat** button.
+- **Stopping:** while the agent is working, **Send** becomes **Stop**.
+- **Context:** each message resumes the same agent session, so context carries over between requests. The conversation is kept in `.chat/` (gitignored) and survives server restarts and hot reloads.
+- **Choosing the agent:** copy `.env.example` to `.env` (gitignored) and set `STUDIO_AGENT=claude` or `STUDIO_AGENT=codex`, then restart the server. Switching agents starts a new agent session; the chat history stays. The CLI must be installed and signed in on the machine running the server; `CLAUDE_BIN` / `CODEX_BIN` point to it if it isn't on the `PATH`. `STUDIO_AGENT_MODEL` overrides the model.
+- **Permissions:**
+  - **Claude Code** follows your own Claude Code permission settings, plus it can always read, edit, and run `npm run check` / `npm run export-sdk`. Headless runs can't ask for approval, so anything your settings would prompt for is refused instead, and the chat says so. `CLAUDE_PERMISSION_MODE` overrides the mode (e.g. `acceptEdits` to restrict, `bypassPermissions` to allow everything).
+  - **Codex** runs commands in its sandbox. `CODEX_SANDBOX` defaults to `workspace-write`: edit the repo and local packs, no network. `danger-full-access` allows everything.
+- **Adding an agent:** write an adapter in `server/agents/` (the interface is described in `server/agents/index.js`) and register it there.
+
+The server only accepts requests addressed to `localhost`, and POSTs need an `X-Studio-Tools: 1` header. That way a web page you visit can't drive the chat.
+
 ## Writing a tool
 
 Tools are classes derived from `SDK.Tool`, living in a pack's `Tools/` folder:
@@ -101,7 +116,7 @@ return MyTool
 
 While a tool is active, the system shows a **shutdown overlay** at the bottom of the viewport: a Done button by default, or Accept/Cancel. Tools configure it with a `shutdown` field, and `deactivate(ctx, reason)` receives the button the user clicked, or `Force` (see docs/TOOLPACKS.md).
 
-Tools can extend other tool classes (`Base:extend({...})`, overriding methods and calling `Base.method(self, ...)`). In the core pack, Paint, Erase and Move all build on `Shared/PartPickerTool`. The full contract, including inheritance, settings, manifest and versioning rules, is in [docs/TOOLPACKS.md](docs/TOOLPACKS.md).
+Tools can extend other tool classes (`Base:extend({...})`, overriding methods and calling `Base.method(self, ...)`). In the core pack, Paint, Erase and QuickMove all build on `Shared/PartPickerTool`. The full contract, including inheritance, settings, manifest and versioning rules, is in [docs/TOOLPACKS.md](docs/TOOLPACKS.md).
 
 ### ToolContext API
 
@@ -132,5 +147,5 @@ Tools can extend other tool classes (`Base:extend({...})`, overriding methods an
 
 - **Place Block** — click a surface to place a cube against it; grid snapping, size, color, material.
 - **Paint** — click or drag across parts to recolor them (optionally set material). An Accept/Cancel tool: Accept is disabled until something is painted, and Cancel asks for confirmation and then reverts the whole session.
-- **Move** — drag a part to slide it in XZ; hold Shift to move it vertically. Optional snap increment.
+- **QuickMove** — drag a part to slide it in XZ; hold Shift to move it vertically. Optional snap increment.
 - **Erase** — click to delete; by default only blocks created by Place Block.

@@ -14,6 +14,7 @@
 ]]
 
 local SDK = require(script.Parent.SDK)
+local ChatPanel = require(script.ChatPanel)
 local Palette = require(script.Palette)
 local ToolManager = require(script.ToolManager)
 
@@ -23,7 +24,13 @@ function System.start(host: any, root: Instance)
 	local maid = SDK.Maid.new()
 
 	local ok, result = pcall(function()
-		local manager = maid:add(ToolManager.new(host, root:FindFirstChild("Packs")))
+		local chat = maid:add(ChatPanel.new(host))
+		local manager = maid:add(ToolManager.new(host, root:FindFirstChild("Packs"), {
+			-- Viewport clicks on the chat box shouldn't reach the active tool.
+			isInputBlocked = function()
+				return chat:isBlockingInput()
+			end,
+		}))
 		maid:add(Palette.new(host, manager))
 
 		local system = {}

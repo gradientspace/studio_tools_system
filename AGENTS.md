@@ -14,12 +14,15 @@ You can't see or operate Studio. Your feedback comes from `npm run check` (stati
 | `toolpacks.json` | Packs everyone gets (committed) | hot reload |
 | `toolpacks.local.json` | The user's own packs (gitignored; machine-specific paths go here, never in committed files) | hot reload |
 | `studio_plugin/StudioToolsLoader.lua` | The loader plugin installed in Studio | **reinstall + Studio restart** |
-| `server/` | Dev server, pack syncing, tree/sourcemap building, SDK generation | **server restart** |
+| `server/` | Dev server, pack syncing, tree/sourcemap building, SDK generation, Tools Agent chat (`chat.js`, agent adapters in `agents/`) | **server restart** |
+| `.env` | Server settings, e.g. which agent powers the chat (gitignored; see `.env.example`) | **server restart** |
 | `scripts/` | `check`, `export-sdk`, `new-pack`, `sync-packs`, `install-plugin` | (run directly) |
 | `templates/toolpack/` | Template copied by `npm run new-pack` | — |
 | `docs/TOOLPACKS.md` | The tool pack contract. Read it before changing packs or the SDK. | — |
 
-Generated or managed, never edit by hand: `toolpacks/*/src/SDK.luau` (use `npm run export-sdk`), `.toolpacks/` (git pack cache), `.tools/` (luau-lsp), `logs/`.
+Generated or managed, never edit by hand: `toolpacks/*/src/SDK.luau` (use `npm run export-sdk`), `.toolpacks/` (git pack cache), `.tools/` (luau-lsp), `logs/`, `.chat/` (Studio chat conversation).
+
+You may be running headless from the Studio "Tools Agent" chat box (`server/chat.js`), as Claude Code or Codex. In that case the user sees only your text replies, and nobody can approve permission prompts, so actions that need approval are refused.
 
 ## Commands
 
