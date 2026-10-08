@@ -2,8 +2,9 @@
 // --resume <session id>.
 //
 // Permissions follow the user's own Claude Code settings, plus allow rules
-// for reading, editing and `npm run check` / `npm run export-sdk` so the
-// core edit/check loop always works. CLAUDE_PERMISSION_MODE overrides the
+// for reading, editing and `npm run check` / `export-sdk` / `new-pack` so
+// the core edit/check loop always works. The chat instructions are passed
+// with --append-system-prompt on every turn. CLAUDE_PERMISSION_MODE overrides the
 // mode (e.g. "acceptEdits" to restrict, "bypassPermissions" for everything).
 
 const path = require("node:path");
@@ -19,6 +20,7 @@ const ALLOWED_TOOLS = [
   "Bash(npm run check:*)",
   "Bash(npm run export-sdk)",
   "Bash(npm run export-sdk:*)",
+  "Bash(npm run new-pack:*)",
 ];
 
 function describeToolUse(block, cwd) {

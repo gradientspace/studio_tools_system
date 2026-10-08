@@ -1,8 +1,8 @@
 // Codex adapter: `codex exec --json`, resuming with `codex exec resume <id>`.
 //
-// Codex reads AGENTS.md by itself. It has no flag for extra instructions,
-// so the chat instructions are prepended to the first message of a session
-// (the resumed thread keeps them).
+// Codex reads AGENTS.md by itself. The chat instructions are passed as
+// developer instructions (-c developer_instructions=...). Codex only applies
+// them when a session starts; a resumed session keeps its original ones.
 //
 // Commands run in Codex's sandbox: CODEX_SANDBOX (default "workspace-write":
 // edit the repo and local packs, no network; "danger-full-access" for
@@ -24,6 +24,8 @@ function run(turn, handlers) {
   // Options go before the `resume` subcommand, which doesn't accept --sandbox
   // or --add-dir itself; config overrides (-c) work for both.
   const args = ["exec", "--json", "-c", `sandbox_mode="${sandbox}"`];
+  // The value is TOML; a JSON string literal is also a valid TOML string.
+  if (turn.instructions) args.push("-c", `developer_instructions=${JSON.stringify(turn.instructions)}`);
   if (turn.extraDirs.length > 0) {
     args.push("-c", `sandbox_workspace_write.writable_roots=${JSON.stringify(turn.extraDirs)}`);
   }
@@ -31,9 +33,6 @@ function run(turn, handlers) {
   if (turn.sessionId) args.push("resume", turn.sessionId);
   args.push("-"); // prompt from stdin
 
-  const input = turn.sessionId
-    ? turn.message
-    : `[Instructions for this session]\n${turn.instructions}\n\n[User message]\n${turn.message}`;
 
   const rel = (file) => {
     if (typeof file !== "string") return "";
@@ -46,7 +45,7 @@ function run(turn, handlers) {
   let summary = "";
 
   return runJsonLines(
-    { bin, args, cwd: turn.cwd, input },
+    { bin, args, cwd: turn.cwd, input: turn.message },
     (event) => {
       const item = event.item || {};
       switch (event.type) {

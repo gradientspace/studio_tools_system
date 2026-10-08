@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 // Creates a new tool pack from templates/toolpack and registers it in
-// toolpacks.local.json (this user's own, gitignored pack list).
+// toolpacks.local.json (this user's own, gitignored pack list). Packs created
+// in user_toolpacks/ aren't registered; the server finds them by itself.
 //
-//   npm run new-pack -- <dir> [packId]
+//   npm run new-pack -- <dir> [packId] [--name "Pack Name"] [--tab Tab] [--empty]
 //
-// <dir> must not exist yet (or be empty). packId defaults to the folder name.
+// <dir> must not exist yet (or be empty). packId defaults to the folder name,
+// the name to the id in title case, the tab to "Core". --empty leaves out the
+// example tool.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -19,8 +22,21 @@ function fail(message) {
   process.exit(1);
 }
 
-const [dirArg, idArg] = process.argv.slice(2);
-if (!dirArg) fail("Usage: npm run new-pack -- <dir> [packId]");
+const USAGE = 'Usage: npm run new-pack -- <dir> [packId] [--name "Pack Name"] [--tab Tab] [--empty]';
+const positional = [];
+const options = { name: null, tab: null, empty: false };
+const argv = process.argv.slice(2);
+for (let i = 0; i < argv.length; i++) {
+  const arg = argv[i];
+  if (arg === "--empty") options.empty = true;
+  else if (arg === "--name" || arg === "--tab") {
+    if (i + 1 >= argv.length) fail(USAGE);
+    options[arg.slice(2)] = argv[++i];
+  } else if (arg.startsWith("--")) fail(`Unknown option ${arg}\n${USAGE}`);
+  else positional.push(arg);
+}
+const [dirArg, idArg] = positional;
+if (!dirArg) fail(USAGE);
 
 const packDir = path.resolve(dirArg);
 if (fs.existsSync(packDir) && fs.readdirSync(packDir).length > 0) fail(`${packDir} already exists and isn't empty`);
@@ -28,11 +44,13 @@ if (fs.existsSync(packDir) && fs.readdirSync(packDir).length > 0) fail(`${packDi
 const packId = idArg || path.basename(packDir).replace(/[^A-Za-z0-9_-]/g, "_");
 if (!/^[A-Za-z0-9_-]+$/.test(packId)) fail(`Invalid pack id "${packId}": use letters, digits, "_" or "-"`);
 
-const packName = packId
-  .split(/[_-]+/)
-  .filter(Boolean)
-  .map((word) => word[0].toUpperCase() + word.slice(1))
-  .join(" ");
+const packName =
+  options.name ||
+  packId
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((word) => word[0].toUpperCase() + word.slice(1))
+    .join(" ");
 
 const replacements = {
   "{{PACK_ID}}": packId,
@@ -48,6 +66,7 @@ function copyTemplate(src, dest) {
     if (entry.isDirectory()) {
       copyTemplate(from, to);
     } else {
+      if (options.empty && path.basename(src) === "Tools" && /\.luau?$/.test(entry.name)) continue;
       let text = fs.readFileSync(from, "utf8");
       for (const [key, value] of Object.entries(replacements)) text = text.split(key).join(value);
       fs.writeFileSync(to, text);
@@ -56,6 +75,13 @@ function copyTemplate(src, dest) {
 }
 
 copyTemplate(TEMPLATE_DIR, packDir);
+if (options.name || options.tab) {
+  const manifestPath = path.join(packDir, "toolpack.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  if (options.name) manifest.name = options.name;
+  if (options.tab) manifest.tab = options.tab;
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+}
 const pack = packs.readPack({ dir: packDir, origin: dirArg });
 sdk.write(pack.sourceDir);
 console.log(`Created pack "${packId}" in ${packDir}`);
@@ -64,7 +90,9 @@ console.log(`Created pack "${packId}" in ${packDir}`);
 const alreadyListed = packs
   .readConfig()
   .packs.some((entry) => typeof entry.path === "string" && path.resolve(entry.baseDir, entry.path) === packDir);
-if (alreadyListed) {
+if (path.dirname(packDir) === packs.USER_PACKS_DIR) {
+  console.log("In user_toolpacks/, so the server loads it without a config entry");
+} else if (alreadyListed) {
   console.log("Already listed in the pack config");
 } else {
   const localConfig = packs.readConfigFile(packs.LOCAL_CONFIG_PATH);
@@ -76,8 +104,8 @@ if (alreadyListed) {
 
 const relativeToCwd = path.relative(process.cwd(), packDir);
 const shownDir = relativeToCwd.startsWith("..") ? packDir : relativeToCwd || ".";
+const gitStep = path.dirname(packDir) === packs.USER_PACKS_DIR ? "" : `\n  cd "${shownDir}" && git init        # if this will be its own repo`;
 console.log(`
-Next steps:
-  cd "${shownDir}" && git init        # if this will be its own repo
+Next steps:${gitStep}
   npm run check                       # from ${REPO_ROOT}
   Edit src/Tools/; a running server hot-reloads the pack into Studio.`);

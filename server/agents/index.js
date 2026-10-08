@@ -11,7 +11,7 @@
 //     sessionId,     // the agent's session id to resume, or null for a new session
 //     cwd,           // the repo root
 //     extraDirs,     // local pack folders outside the repo that must be editable
-//     instructions,  // chat-specific instructions to apply to the session
+//     instructions,  // the chat's system prompt (server/agent-instructions.md)
 //   }
 //
 // and the adapter reports progress through `handlers`:

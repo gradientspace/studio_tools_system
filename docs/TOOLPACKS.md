@@ -2,13 +2,15 @@
 
 A **tool pack** is a folder, usually its own git repo, that provides one or more tools. The Studio Tools server syncs the packs listed in `toolpacks.json`, serves them to Studio along with the framework, and hot-reloads them like everything else.
 
-Start a new pack with `npm run new-pack -- <dir> [packId]`. It creates the manifest, an example tool, the generated `SDK.luau` and an `AGENTS.md`/`CLAUDE.md` for agents working in the pack, and registers the pack in `toolpacks.local.json`. `toolpacks/core` in this repo is the fuller reference pack.
+Start a new pack with `npm run new-pack -- <dir> [packId]`. It creates the manifest, an example tool, the generated `SDK.luau` and an `AGENTS.md`/`CLAUDE.md` for agents working in the pack, and registers the pack in `toolpacks.local.json`. Options: `--name "Pack Name"`, `--tab Tab`, and `--empty` (no example tool). `toolpacks/core` in this repo is the fuller reference pack.
 
 ## Adding a pack
 
 Packs are listed in two files at the root of the studio_tools_system repo, with the same format:
 - `toolpacks.json` (committed): packs everyone gets, such as `core`.
 - `toolpacks.local.json` (gitignored): your own packs. `npm run new-pack` adds new packs here. Paths in it are specific to your machine, so they never end up in the repo.
+
+Folders in `user_toolpacks/` (gitignored) that contain a `toolpack.json` are loaded without being listed anywhere, and new ones are picked up while the server runs. The Tools Agent chat puts the tools it creates in `user_toolpacks/user/`.
 
 ```json
 {

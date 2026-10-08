@@ -29,10 +29,20 @@ const POLL_TIMEOUT_MS = 15000;
 const RECHECK_MS = 30000;
 const UNAVAILABLE_TEXT = "The Tools Agent isn't available. Details are in the server log.";
 
-const INSTRUCTIONS = `You are being driven from a chat box inside Roblox Studio (the Studio Tools System's "Tools Agent").
-The user only sees your text replies, not your tool calls, commands or diffs, so end each turn with a short, plain summary of what you did or found. Keep replies brief.
-The dev server is running and hot-reloads your edits into the user's Studio session (unless a tool is active there). Follow AGENTS.md: after editing Luau, run \`npm run check\`, then read logs/studio-tools.log to confirm the reload.
-Nobody can approve permission prompts here, so actions that would need approval are refused; if one is refused, tell the user what you needed to do.`;
+// The agent's system prompt (chat-specific instructions on top of AGENTS.md).
+// Read for every turn, so edits apply without a server restart. Claude Code
+// applies them on every message; Codex keeps a session's first instructions
+// until New chat.
+const INSTRUCTIONS_PATH = path.join(__dirname, "agent-instructions.md");
+
+function readInstructions() {
+  try {
+    return fs.readFileSync(INSTRUCTIONS_PATH, "utf8").trim();
+  } catch (err) {
+    log(`[chat] Can't read ${INSTRUCTIONS_PATH}: ${err.message}`);
+    return "";
+  }
+}
 
 let log = console.log;
 let agent = null;
@@ -160,7 +170,7 @@ function runTurn(message, allowFreshRetry) {
       sessionId: state.sessionId,
       cwd: REPO_ROOT,
       extraDirs: extraDirs(),
-      instructions: INSTRUCTIONS,
+      instructions: readInstructions(),
     },
     {
       session(id) {

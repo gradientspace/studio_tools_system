@@ -306,6 +306,17 @@ for (const configPath of packs.CONFIG_PATHS) {
   });
 }
 
+// New pack folders in user_toolpacks/ are picked up without a config change.
+fs.mkdirSync(packs.USER_PACKS_DIR, { recursive: true });
+try {
+  fs.watch(packs.USER_PACKS_DIR, { recursive: true }, () => {
+    configDirty = true;
+    scheduleRebuild();
+  });
+} catch (err) {
+  log(`Can't watch ${packs.USER_PACKS_DIR}: ${err.message}`);
+}
+
 log(`Framework: ${SRC_DIR}`);
 log(`Log file: ${LOG_PATH}`);
 chat.init({ log });
@@ -315,7 +326,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     process.exit(0);
   });
 }
-log(`Pack config: ${packs.CONFIG_PATHS.join(" + ")}`);
+log(`Pack config: ${packs.CONFIG_PATHS.join(" + ")} + packs in ${packs.USER_PACKS_DIR}`);
 rebuild();
 for (const host of HOSTS) {
   const server = http.createServer(handleRequest);

@@ -16,6 +16,8 @@ studio_plugin_src/                    The framework (hot-reloaded)
   System/                               internals: entry point, ToolManager, ToolContext, Palette UI, settings
 toolpacks.json                        Tool packs everyone gets (local paths and/or git repos)
 toolpacks.local.json                  Your own packs, same format (gitignored)
+user_toolpacks/                       Your own pack folders, loaded without being listed (gitignored);
+                                        the Tools Agent puts new tools in user_toolpacks/user
 libraries.json                        Libraries bundled into the plugin, pinned to GitHub release assets
 toolpacks/core/                       Built-in pack; reference for writing your own
   toolpack.json                         pack manifest
@@ -38,7 +40,7 @@ npm run sync-packs        # clone/pull the git packs in toolpacks.json (missing 
 npm run sync-libraries    # download the libraries in libraries.json (check and install-plugin do this when needed)
 npm run check             # syntax/type check framework, loader and packs; validate pack manifests
 npm run export-sdk        # (re)generate SDK.luau in local packs
-npm run new-pack -- <dir> # scaffold a new tool pack (with agent instructions) and register it
+npm run new-pack -- <dir> # scaffold a new tool pack (with agent instructions) and register it (options: --name, --tab, --empty)
 ```
 
 Studio output about the tool system (loads, failures, runtime errors) is forwarded to the server and written to `logs/studio-tools.log`, so it can be followed without looking at Studio. See "Checking and debugging" in [docs/TOOLPACKS.md](docs/TOOLPACKS.md).
@@ -81,7 +83,9 @@ State that should survive a hot reload can be kept in `host.persist` (a plain ta
 ## Tools Agent chat in Studio
 
 The **Tools Agent** button at the bottom-left of the viewport opens a chat box connected to a headless coding agent that the dev server runs in this repo. The agent is [Claude Code](https://claude.com/claude-code) by default, or Codex; Studio doesn't know or care which. Type a request ("make Place Block's default size 8") and press Enter.
-- **What the agent does:** it edits the framework or local packs and runs `npm run check`. The server then hot-reloads the change into Studio.
+- **What the agent does:** it edits tools and runs `npm run check`. The server then hot-reloads the change into Studio.
+- **Where new tools go:** in your own pack, `user_toolpacks/user/` (tab "User"), which is gitignored, so they stay out of the system's repo. The agent creates the pack when it's first needed. It changes the framework or the built-in packs only when you ask for that explicitly.
+- **System prompt:** `server/agent-instructions.md` holds the chat-specific instructions, on top of `AGENTS.md`. Claude Code gets them with `--append-system-prompt` on every message. Codex gets them as `developer_instructions` when a session starts, so after editing the file, use **New chat** for Codex to see the change.
 - **Default view:** just the entry field and a one-line preview of the latest reply or current activity. **History** expands the full conversation, with a **New chat** button.
 - **Stopping:** while the agent is working, **Send** becomes **Stop**.
 - **Context:** each message resumes the same agent session, so context carries over between requests. The conversation is kept in `.chat/` (gitignored) and survives server restarts and hot reloads.

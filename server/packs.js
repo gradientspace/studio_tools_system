@@ -11,6 +11,10 @@
 //     ]
 //   }
 //
+// In addition, every folder in user_toolpacks/ (gitignored) that has a
+// toolpack.json is loaded without being listed. That's where the user's own
+// tools go, e.g. the ones the Tools Agent creates (user_toolpacks/user).
+//
 // See docs/TOOLPACKS.md for the pack contract.
 
 require("./env").loadEnv();
@@ -24,6 +28,7 @@ const CONFIG_PATH = path.resolve(process.env.TOOLPACKS_CONFIG || path.join(REPO_
 const LOCAL_CONFIG_PATH = path.join(path.dirname(CONFIG_PATH), "toolpacks.local.json");
 const CONFIG_PATHS = [CONFIG_PATH, LOCAL_CONFIG_PATH];
 const CACHE_DIR = path.join(REPO_ROOT, ".toolpacks");
+const USER_PACKS_DIR = path.join(REPO_ROOT, "user_toolpacks");
 const MANIFEST_NAME = "toolpack.json";
 const PACK_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const DEFAULT_TAB = "Core";
@@ -37,12 +42,33 @@ function readConfigFile(file) {
   return config;
 }
 
-// The merged config. Each entry gets `baseDir`, the folder its relative `path` is resolved from.
+// Pack folders in user_toolpacks/ (those with a toolpack.json), sorted by name.
+function userPackDirs() {
+  if (!fs.existsSync(USER_PACKS_DIR)) return [];
+  return fs
+    .readdirSync(USER_PACKS_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => path.join(USER_PACKS_DIR, entry.name))
+    .filter((dir) => fs.existsSync(path.join(dir, MANIFEST_NAME)))
+    .sort();
+}
+
+// The merged config: both config files, then any user_toolpacks/ folders not
+// already listed. Each entry gets `baseDir`, the folder its relative `path`
+// is resolved from.
 function readConfig() {
   const entries = [];
   for (const file of CONFIG_PATHS) {
     for (const entry of readConfigFile(file).packs) {
       entries.push({ ...entry, baseDir: path.dirname(file) });
+    }
+  }
+  const listed = new Set(
+    entries.filter((entry) => typeof entry.path === "string").map((entry) => path.resolve(entry.baseDir, entry.path))
+  );
+  for (const dir of userPackDirs()) {
+    if (!listed.has(dir)) {
+      entries.push({ path: path.relative(USER_PACKS_DIR, dir), baseDir: USER_PACKS_DIR, origin: "user_toolpacks" });
     }
   }
   return { packs: entries };
@@ -87,7 +113,9 @@ function resolvePackDirs(config, { update = false, log = console.log } = {}) {
   for (const entry of config.packs) {
     if (entry.enabled === false) continue;
     if (typeof entry.path === "string") {
-      result.push({ dir: path.resolve(entry.baseDir || path.dirname(CONFIG_PATH), entry.path), origin: entry.path });
+      const dir = path.resolve(entry.baseDir || path.dirname(CONFIG_PATH), entry.path);
+      const origin = entry.origin ? `${entry.origin}/${entry.path}` : entry.path;
+      result.push({ dir, origin });
     } else if (typeof entry.git === "string") {
       const dir = gitCacheDir(entry.git);
       const origin = entry.ref ? `${entry.git}#${entry.ref}` : entry.git;
@@ -177,6 +205,7 @@ module.exports = {
   CONFIG_PATH,
   LOCAL_CONFIG_PATH,
   CONFIG_PATHS,
+  USER_PACKS_DIR,
   readConfigFile,
   readConfig,
   resolvePackDirs,

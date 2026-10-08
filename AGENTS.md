@@ -13,9 +13,10 @@ You can't see or operate Studio. Your feedback comes from `npm run check` (stati
 | `toolpacks/core/` | Built-in tool pack; the reference for how packs are written | hot reload |
 | `toolpacks.json` | Packs everyone gets (committed) | hot reload |
 | `toolpacks.local.json` | The user's own packs (gitignored; machine-specific paths go here, never in committed files) | hot reload |
+| `user_toolpacks/` | The user's own pack folders (gitignored), loaded without being listed. The Tools Agent puts new tools in `user_toolpacks/user` | hot reload |
 | `studio_plugin/StudioToolsLoader.lua` | The loader plugin installed in Studio | **reinstall + Studio restart** |
 | `libraries.json` | Libraries packed into the plugin (e.g. geometry3luau), pinned to GitHub release assets. Code requires them as `script:FindFirstAncestor("StudioTools").Libraries.<name>` | **reinstall + Studio restart** |
-| `server/` | Dev server, pack syncing, tree/sourcemap building, SDK generation, Tools Agent chat (`chat.js`, agent adapters in `agents/`) | **server restart** |
+| `server/` | Dev server, pack syncing, tree/sourcemap building, SDK generation, Tools Agent chat (`chat.js`, agent adapters in `agents/`, system prompt in `agent-instructions.md`) | **server restart** (except `agent-instructions.md`, read on every message) |
 | `.env` | Server settings, e.g. which agent powers the chat (gitignored; see `.env.example`) | **server restart** |
 | `scripts/` | `check`, `export-sdk`, `new-pack`, `sync-packs`, `sync-libraries`, `install-plugin` | (run directly) |
 | `templates/toolpack/` | Template copied by `npm run new-pack` | — |
@@ -23,7 +24,7 @@ You can't see or operate Studio. Your feedback comes from `npm run check` (stati
 
 Generated or managed, never edit by hand: `toolpacks/*/src/SDK.luau` (use `npm run export-sdk`), `.toolpacks/` (git pack cache), `.tools/` (luau-lsp), `.libraries/` (downloaded libraries; read `.libraries/<name>-<tag>/src/` for a library's source, but change it in the library's own repo), `logs/`, `.chat/` (Studio chat conversation).
 
-You may be running headless from the Studio "Tools Agent" chat box (`server/chat.js`), as Claude Code or Codex. In that case the user sees only your text replies, and nobody can approve permission prompts, so actions that need approval are refused.
+You may be running headless from the Studio "Tools Agent" chat box (`server/chat.js`), as Claude Code or Codex. In that case you also get the instructions in `server/agent-instructions.md`: the user sees only your text replies, nobody can approve permission prompts (actions that need approval are refused), and new tools go in `user_toolpacks/user/`.
 
 ## Commands
 
@@ -31,7 +32,7 @@ You may be running headless from the Studio "Tools Agent" chat box (`server/chat
 npm start                    # dev server (usually already running in the user's terminal; don't start a second one on the same port)
 npm run check                # REQUIRED after every Luau or pack change; exit code 1 = errors
 npm run export-sdk           # regenerate SDK.luau in local packs after changing SDK/Types.luau
-npm run new-pack -- <dir>    # scaffold a new tool pack and register it in toolpacks.local.json
+npm run new-pack -- <dir>    # scaffold a new tool pack and register it in toolpacks.local.json (not needed in user_toolpacks/); --name, --tab, --empty
 npm run sync-packs           # pull git packs
 npm run sync-libraries       # download the libraries in libraries.json into .libraries/
 npm run install-plugin       # build the loader plugin, with the libraries, into Studio's Plugins folder (after changing the loader or libraries.json)
