@@ -18,6 +18,8 @@
 
 local CoreGui = game:GetService("CoreGui")
 local HttpService = game:GetService("HttpService")
+local TextService = game:GetService("TextService")
+local UserInputService = game:GetService("UserInputService")
 
 local SDK = require(script.Parent.Parent.SDK)
 local ServerApi = require(script.Parent.ServerApi)
@@ -27,6 +29,9 @@ local LAUNCHER_HEIGHT = 24
 local PANEL_WIDTH = 400
 local HISTORY_HEIGHT = 320
 local ROW_HEIGHT = 28
+local MAX_INPUT_HEIGHT = 140 -- the entry field grows with its text up to this, then shows the last lines
+local INPUT_VERTICAL_PADDING = 6
+local INPUT_HORIZONTAL_PADDING = 8
 local RETRY_DELAY = 3
 
 -- Fixed dark colors: the chat sits on top of the 3D scene.
@@ -297,7 +302,9 @@ function ChatPanel:_build()
 	self.previewText = previewText
 	self.expandButton = expandButton
 
-	-- 4: input row
+	-- 4: input row. The field is multi-line so it word-wraps while editing,
+	-- and grows with its text; the Send button stays at the bottom right.
+	-- Enter sends, Shift+Enter adds a line break.
 	local inputRow = create("Frame", {
 		Name = "Input",
 		LayoutOrder = 4,
@@ -310,6 +317,7 @@ function ChatPanel:_build()
 		BackgroundColor3 = COLORS.field,
 		BorderSizePixel = 0,
 		Size = UDim2.new(1, -70, 1, 0),
+		ClipsDescendants = true,
 		ClearTextOnFocus = false,
 		Font = Enum.Font.SourceSans,
 		TextSize = 15,
@@ -317,20 +325,61 @@ function ChatPanel:_build()
 		PlaceholderText = "What would you like to change?",
 		PlaceholderColor3 = COLORS.dim,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		TextTruncate = Enum.TextTruncate.AtEnd,
+		TextWrapped = true,
+		MultiLine = true,
 		Text = "",
 		Parent = inputRow,
-	}, { corner(4), padding(8, 0) })
-	input.FocusLost:Connect(function(enterPressed)
-		if enterPressed then
-			self:_send()
+	}, { corner(4), padding(INPUT_HORIZONTAL_PADDING, INPUT_VERTICAL_PADDING) })
+	-- A multi-line TextBox inserts a line break on Enter. Treat a single typed
+	-- line break as Send unless Shift is held (pasted line breaks are kept).
+	local previousText = ""
+	local restoring = false
+	input:GetPropertyChangedSignal("Text"):Connect(function()
+		if restoring then
+			return
 		end
+		local text = input.Text
+		local cursor = input.CursorPosition
+		local typedLineBreak = #text == #previousText + 1
+			and cursor > 1
+			and string.sub(text, cursor - 1, cursor - 1) == "\n"
+		local shiftDown = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+			or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+		if typedLineBreak and not shiftDown then
+			restoring = true
+			input.Text = previousText
+			input.CursorPosition = cursor - 1
+			restoring = false
+			self:_send()
+			return
+		end
+		previousText = text
 	end)
+	-- TextBounds isn't updated while a TextBox is being edited, so measure the
+	-- wrapped text directly.
+	local function fitInput()
+		local text = input.Text
+		if string.sub(text, -1) == "\n" then
+			text ..= " " -- count a trailing empty line
+		end
+		local width = math.max(1, input.AbsoluteSize.X - 2 * INPUT_HORIZONTAL_PADDING)
+		local textHeight = if text == ""
+			then 0
+			else TextService:GetTextSize(text, input.TextSize, input.Font, Vector2.new(width, math.huge)).Y
+		local wanted = textHeight + 2 * INPUT_VERTICAL_PADDING
+		local height = math.clamp(math.ceil(wanted), ROW_HEIGHT, MAX_INPUT_HEIGHT)
+		inputRow.Size = UDim2.new(1, 0, 0, height)
+		-- Once capped, keep the end of the text (where you're typing) in view.
+		input.TextYAlignment = if wanted > MAX_INPUT_HEIGHT then Enum.TextYAlignment.Bottom else Enum.TextYAlignment.Center
+	end
+	input:GetPropertyChangedSignal("Text"):Connect(fitInput)
+	input:GetPropertyChangedSignal("AbsoluteSize"):Connect(fitInput)
+	fitInput()
 	local sendButton = create("TextButton", {
 		Name = "Send",
-		AnchorPoint = Vector2.new(1, 0),
-		Position = UDim2.fromScale(1, 0),
-		Size = UDim2.new(0, 64, 1, 0),
+		AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.fromScale(1, 1),
+		Size = UDim2.new(0, 64, 0, ROW_HEIGHT),
 		AutoButtonColor = true,
 		BackgroundColor3 = COLORS.send,
 		BorderSizePixel = 0,
