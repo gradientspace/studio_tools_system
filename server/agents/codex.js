@@ -13,8 +13,12 @@ const { runJsonLines } = require("./process");
 
 const CHANGE_VERBS = { add: "Create", update: "Edit", delete: "Delete" };
 
+function binPath() {
+  return process.env.CODEX_BIN || "codex";
+}
+
 function run(turn, handlers) {
-  const bin = process.env.CODEX_BIN || "codex";
+  const bin = binPath();
   const sandbox = process.env.CODEX_SANDBOX || "workspace-write";
 
   // Options go before the `resume` subcommand, which doesn't accept --sandbox
@@ -78,10 +82,7 @@ function run(turn, handlers) {
       }
     },
     (code, stderr, spawnError) => {
-      if (spawnError) {
-        const hint = spawnError.code === "ENOENT" ? " (is Codex installed? set CODEX_BIN in .env)" : "";
-        return handlers.finish({ error: `Couldn't start ${bin}: ${spawnError.message}${hint}` });
-      }
+      if (spawnError) return handlers.finish({ unavailable: `Couldn't start ${bin}: ${spawnError.message}` });
       if (code !== 0 && /no rollout found/i.test(stderr)) return handlers.finish({ sessionMissing: true });
       if (failure) return handlers.finish({ error: failure, summary });
       if (code !== 0) {
@@ -92,4 +93,10 @@ function run(turn, handlers) {
   );
 }
 
-module.exports = { id: "codex", displayName: "Codex", run };
+module.exports = {
+  id: "codex",
+  displayName: "Codex",
+  setupHint: "Install Codex, or set CODEX_BIN in .env if it isn't on the server's PATH.",
+  bin: binPath,
+  run,
+};

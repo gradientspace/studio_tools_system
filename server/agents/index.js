@@ -1,7 +1,10 @@
 // Coding agents that can power the Studio "Tools Agent" chat. Pick one with
 // STUDIO_AGENT in .env (default "claude").
 //
-// An adapter is { id, displayName, run(turn, handlers) -> { stop() } }, where
+// An adapter is { id, displayName, setupHint, bin(), run(turn, handlers) -> { stop() } }.
+// bin() is the CLI to run; `<bin> --version` must succeed when the agent is
+// usable (checked at startup). setupHint tells the server's user how to fix
+// a missing CLI. In run(turn, handlers),
 //
 //   turn = {
 //     message,       // the user's text
@@ -18,7 +21,8 @@
 //   step(text)         a visible step for the history, e.g. "Edit path/to/file"
 //   activity(text)     transient "what it's doing now" status, not recorded
 //   refused(list)      actions refused because nobody could approve them
-//   finish(result)     exactly once: { error?, sessionMissing?, summary? }
+//   finish(result)     exactly once: { error?, unavailable?, sessionMissing?, summary? }
+//                      unavailable = the CLI couldn't be started (detail text)
 //                      sessionMissing = the session to resume no longer exists
 //                      (the conversation then retries once with a new session)
 

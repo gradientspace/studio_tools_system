@@ -1,0 +1,5 @@
+{
+  "libraries": [
+    { "name": "geometry3luau", "repo": "gradientspace/geometry3luau", "tag": "v0.1.0", "asset": "geometry3luau.rbxmx" }
+  ]
+}

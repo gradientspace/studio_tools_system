@@ -252,6 +252,7 @@ function handleRequest(req, res) {
         logFile: LOG_PATH,
         packs: bundle.packs,
         agent: chat.agentName(),
+        chat: chat.status(),
         ...versionInfo(),
       });
 

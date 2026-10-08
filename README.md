@@ -4,6 +4,8 @@ A hot-reloadable framework for building interactive tools in Roblox Studio.
 
 The only thing installed in Studio is a small **loader plugin**. The framework itself and all the tools are Luau source files served by a local Node server. When you save a file, the server notices, and the loader swaps in the new code — no plugin reinstall or Studio restart.
 
+Shared Luau **libraries** (e.g. [geometry3luau](https://github.com/gradientspace/geometry3luau)) are installed inside the loader plugin from their published GitHub releases, so they load once per Studio session and any tool can `require` them.
+
 Tools come in **tool packs**: folders or separate git repos with a small manifest. The palette shows a tab per tab name the packs declare (default "Core"); several packs can share a tab. Packs are listed in `toolpacks.json`, and the server syncs and serves them. See [docs/TOOLPACKS.md](docs/TOOLPACKS.md) for the pack contract.
 
 ```
@@ -14,6 +16,7 @@ studio_plugin_src/                    The framework (hot-reloaded)
   System/                               internals: entry point, ToolManager, ToolContext, Palette UI, settings
 toolpacks.json                        Tool packs everyone gets (local paths and/or git repos)
 toolpacks.local.json                  Your own packs, same format (gitignored)
+libraries.json                        Libraries bundled into the plugin, pinned to GitHub release assets
 toolpacks/core/                       Built-in pack; reference for writing your own
   toolpack.json                         pack manifest
   src/SDK.luau                          generated SDK types + forwarder (npm run export-sdk)
@@ -30,8 +33,9 @@ Requires Node 20+.
 
 ```sh
 npm start                 # run the dev server on http://localhost:34873
-npm run install-plugin    # copy the loader into Studio's local Plugins folder
+npm run install-plugin    # build the loader plugin (with the libraries) into Studio's local Plugins folder
 npm run sync-packs        # clone/pull the git packs in toolpacks.json (missing ones are also cloned on start)
+npm run sync-libraries    # download the libraries in libraries.json (check and install-plugin do this when needed)
 npm run check             # syntax/type check framework, loader and packs; validate pack manifests
 npm run export-sdk        # (re)generate SDK.luau in local packs
 npm run new-pack -- <dir> # scaffold a new tool pack (with agent instructions) and register it
@@ -56,6 +60,22 @@ The status bar at the bottom of the palette shows the connection state and the c
 
 Because every module is required during validation, **modules should not have side effects at require time** — do work in `activate` / `start`, not at the top level.
 
+## Libraries
+
+Libraries are pinned in `libraries.json` to a GitHub release asset: a `.rbxmx` model whose root is the library's ModuleScript.
+
+```json
+{ "libraries": [
+  { "name": "geometry3luau", "repo": "gradientspace/geometry3luau", "tag": "v0.1.0", "asset": "geometry3luau.rbxmx" }
+] }
+```
+
+- `npm run install-plugin` downloads each asset into `.libraries/` and packs it into the plugin (`StudioToolsLoader.rbxmx`) under a `Libraries` folder. Changing a library therefore means reinstalling the plugin and restarting Studio.
+- On every hot reload the loader moves that folder into the new build, at `StudioTools/Libraries/<name>`. The same ModuleScripts are reused, so a library is loaded once per Studio session, not on every reload.
+- Tool code requires it with `require(script:FindFirstAncestor("StudioTools").Libraries.geometry3luau)`.
+- The download also extracts the library's modules into `.libraries/<name>-<tag>/src/`, which `npm run check` uses to resolve those requires (library code itself isn't checked) and coding agents can read.
+- Public releases download without credentials. For a private repo, set `GITHUB_TOKEN` in `.env` or log in with `gh auth login`.
+
 State that should survive a hot reload can be kept in `host.persist` (a plain table owned by the loader). Tool settings are persisted with `plugin:SetSetting` and survive Studio restarts.
 
 ## Tools Agent chat in Studio
@@ -69,6 +89,7 @@ The **Tools Agent** button at the bottom-left of the viewport opens a chat box c
 - **Permissions:**
   - **Claude Code** follows your own Claude Code permission settings, plus it can always read, edit, and run `npm run check` / `npm run export-sdk`. Headless runs can't ask for approval, so anything your settings would prompt for is refused instead, and the chat says so. `CLAUDE_PERMISSION_MODE` overrides the mode (e.g. `acceptEdits` to restrict, `bypassPermissions` to allow everything).
   - **Codex** runs commands in its sandbox. `CODEX_SANDBOX` defaults to `workspace-write`: edit the repo and local packs, no network. `danger-full-access` allows everything.
+- **If the agent can't run** (CLI not installed, wrong `*_BIN`, unknown `STUDIO_AGENT`): the server checks the CLI with `--version` at startup. When the check fails, the chat box shows "The Tools Agent isn't available" and disables input, and the reason goes to the server log and to `GET /` (`chat.detail`). The rest of the tool system works normally. A missing CLI is re-checked every 30 seconds, so installing it is enough; an unknown `STUDIO_AGENT` needs a fix in `.env` and a server restart.
 - **Adding an agent:** write an adapter in `server/agents/` (the interface is described in `server/agents/index.js`) and register it there.
 
 The server only accepts requests addressed to `localhost`, and POSTs need an `X-Studio-Tools: 1` header. That way a web page you visit can't drive the chat.

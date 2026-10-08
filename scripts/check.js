@@ -3,6 +3,7 @@
 // toolpacks.json, without needing Studio:
 //
 //   * pack manifests and layout (toolpack.json, Tools/ folder, SDK.luau)
+//   * libraries.json (libraries are downloaded into .libraries/ if missing)
 //   * Luau syntax, type checking and lints via luau-lsp, against Roblox's
 //     plugin-security API definitions and the same instance tree the loader
 //     builds in Studio
@@ -19,7 +20,8 @@ const { execFileSync, spawnSync } = require("node:child_process");
 
 const packs = require("../server/packs");
 const sdk = require("../server/sdk");
-const { REPO_ROOT, ROOT_NAME, treeFiles, buildSourcemap } = require("../server/tree");
+const libraries = require("../server/libraries");
+const { REPO_ROOT, ROOT_NAME, collectFiles, treeFiles, buildSourcemap } = require("../server/tree");
 
 const LUAU_LSP_VERSION = "1.69.0";
 const TOOLS_DIR = path.join(REPO_ROOT, ".tools");
@@ -131,14 +133,19 @@ function checkPacks() {
   return loaded;
 }
 
-async function checkLuau(loadedPacks) {
+async function checkLuau(loadedPacks, libs) {
   const { exe, defs } = await ensureLuauLsp();
   const files = treeFiles(loadedPacks);
+  // Libraries are mounted at StudioTools/Libraries/<name> in Studio. They're
+  // in the sourcemap so requires of them resolve, but aren't analyzed themselves.
+  const libraryFiles = libs.flatMap((lib) =>
+    collectFiles(lib.sourceDir).map((f) => ({ path: `Libraries/${lib.name}/${f.path}`, absPath: f.absPath }))
+  );
 
   const workDir = path.join(TOOLS_DIR, "check");
   fs.mkdirSync(workDir, { recursive: true });
   const sourcemapPath = path.join(workDir, "sourcemap.json");
-  fs.writeFileSync(sourcemapPath, JSON.stringify(buildSourcemap(files)));
+  fs.writeFileSync(sourcemapPath, JSON.stringify(buildSourcemap([...files, ...libraryFiles])));
 
   const result = spawnSync(
     exe,
@@ -154,6 +161,8 @@ async function checkLuau(loadedPacks) {
   if (result.error) throw result.error;
 
   for (const issue of parseAnalysis(`${result.stdout}\n${result.stderr}`)) {
+    // Library code is checked by its own project, not here.
+    if (issue.file && path.resolve(issue.file).startsWith(libraries.CACHE_DIR + path.sep)) continue;
     const where = issue.file
       ? `${display(issue.file)}:${issue.lineNo}:${issue.col}${issue.instancePath ? ` (${issue.instancePath})` : ""}`
       : "luau-lsp";
@@ -165,15 +174,26 @@ async function checkLuau(loadedPacks) {
   return files.length + 1;
 }
 
+async function checkLibraries() {
+  try {
+    return await libraries.syncLibraries({ log: (msg) => console.log(msg) });
+  } catch (err) {
+    errors.push(`libraries: ${err.message}`);
+    return [];
+  }
+}
+
 async function main() {
   const loadedPacks = checkPacks();
-  const fileCount = await checkLuau(loadedPacks);
+  const libs = await checkLibraries();
+  const fileCount = await checkLuau(loadedPacks, libs);
 
   for (const w of warnings) console.log(`warning: ${w}`);
   for (const e of errors) console.log(`error: ${e}`);
   const packList = loadedPacks.map((p) => p.manifest.id).join(", ") || "none";
+  const libList = libs.map((l) => `${l.name} ${l.tag}`).join(", ") || "none";
   console.log(
-    `\nChecked ${fileCount} files, packs: ${packList}. ${errors.length} error(s), ${warnings.length} warning(s).`
+    `\nChecked ${fileCount} files, packs: ${packList}, libraries: ${libList}. ${errors.length} error(s), ${warnings.length} warning(s).`
   );
   process.exitCode = errors.length > 0 ? 1 : 0;
 }

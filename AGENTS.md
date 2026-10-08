@@ -14,13 +14,14 @@ You can't see or operate Studio. Your feedback comes from `npm run check` (stati
 | `toolpacks.json` | Packs everyone gets (committed) | hot reload |
 | `toolpacks.local.json` | The user's own packs (gitignored; machine-specific paths go here, never in committed files) | hot reload |
 | `studio_plugin/StudioToolsLoader.lua` | The loader plugin installed in Studio | **reinstall + Studio restart** |
+| `libraries.json` | Libraries packed into the plugin (e.g. geometry3luau), pinned to GitHub release assets. Code requires them as `script:FindFirstAncestor("StudioTools").Libraries.<name>` | **reinstall + Studio restart** |
 | `server/` | Dev server, pack syncing, tree/sourcemap building, SDK generation, Tools Agent chat (`chat.js`, agent adapters in `agents/`) | **server restart** |
 | `.env` | Server settings, e.g. which agent powers the chat (gitignored; see `.env.example`) | **server restart** |
-| `scripts/` | `check`, `export-sdk`, `new-pack`, `sync-packs`, `install-plugin` | (run directly) |
+| `scripts/` | `check`, `export-sdk`, `new-pack`, `sync-packs`, `sync-libraries`, `install-plugin` | (run directly) |
 | `templates/toolpack/` | Template copied by `npm run new-pack` | — |
 | `docs/TOOLPACKS.md` | The tool pack contract. Read it before changing packs or the SDK. | — |
 
-Generated or managed, never edit by hand: `toolpacks/*/src/SDK.luau` (use `npm run export-sdk`), `.toolpacks/` (git pack cache), `.tools/` (luau-lsp), `logs/`, `.chat/` (Studio chat conversation).
+Generated or managed, never edit by hand: `toolpacks/*/src/SDK.luau` (use `npm run export-sdk`), `.toolpacks/` (git pack cache), `.tools/` (luau-lsp), `.libraries/` (downloaded libraries; read `.libraries/<name>-<tag>/src/` for a library's source, but change it in the library's own repo), `logs/`, `.chat/` (Studio chat conversation).
 
 You may be running headless from the Studio "Tools Agent" chat box (`server/chat.js`), as Claude Code or Codex. In that case the user sees only your text replies, and nobody can approve permission prompts, so actions that need approval are refused.
 
@@ -32,7 +33,8 @@ npm run check                # REQUIRED after every Luau or pack change; exit co
 npm run export-sdk           # regenerate SDK.luau in local packs after changing SDK/Types.luau
 npm run new-pack -- <dir>    # scaffold a new tool pack and register it in toolpacks.local.json
 npm run sync-packs           # pull git packs
-npm run install-plugin       # copy the loader into Studio's Plugins folder (after changing the loader)
+npm run sync-libraries       # download the libraries in libraries.json into .libraries/
+npm run install-plugin       # build the loader plugin, with the libraries, into Studio's Plugins folder (after changing the loader or libraries.json)
 ```
 
 ## Work loop

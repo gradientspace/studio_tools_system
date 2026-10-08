@@ -41,8 +41,12 @@ function describeToolUse(block, cwd) {
   }
 }
 
+function binPath() {
+  return process.env.CLAUDE_BIN || "claude";
+}
+
 function run(turn, handlers) {
-  const bin = process.env.CLAUDE_BIN || "claude";
+  const bin = binPath();
   const args = ["-p", "--output-format", "stream-json", "--verbose", "--append-system-prompt", turn.instructions];
   args.push("--allowedTools", ...ALLOWED_TOOLS);
   if (process.env.CLAUDE_PERMISSION_MODE) args.push("--permission-mode", process.env.CLAUDE_PERMISSION_MODE);
@@ -88,10 +92,7 @@ function run(turn, handlers) {
       }
     },
     (code, stderr, spawnError) => {
-      if (spawnError) {
-        const hint = spawnError.code === "ENOENT" ? " (is Claude Code installed? set CLAUDE_BIN in .env)" : "";
-        return handlers.finish({ error: `Couldn't start ${bin}: ${spawnError.message}${hint}` });
-      }
+      if (spawnError) return handlers.finish({ unavailable: `Couldn't start ${bin}: ${spawnError.message}` });
       if (code !== 0 && /No conversation found/.test(stderr)) return handlers.finish({ sessionMissing: true });
       if (resultError) return handlers.finish({ error: resultError, summary });
       if (code !== 0 && !gotResult) return handlers.finish({ error: stderr.trim() || `${bin} exited with code ${code}` });
@@ -100,4 +101,10 @@ function run(turn, handlers) {
   );
 }
 
-module.exports = { id: "claude", displayName: "Claude Code", run };
+module.exports = {
+  id: "claude",
+  displayName: "Claude Code",
+  setupHint: "Install Claude Code, or set CLAUDE_BIN in .env if it isn't on the server's PATH.",
+  bin: binPath,
+  run,
+};

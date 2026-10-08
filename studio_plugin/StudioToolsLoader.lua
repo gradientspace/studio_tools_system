@@ -22,12 +22,18 @@
 	  * The last good build is cached in plugin settings so tools still work
 	    when the server isn't running.
 
+	Libraries (libraries.json, e.g. geometry3luau) are installed with the
+	plugin as children of this script's Libraries folder, so they aren't
+	re-sent with every reload. The folder is moved into each build as
+	StudioTools/Libraries; the same ModuleScripts are reused, so require()
+	keeps them loaded across reloads.
+
 	Studio output that mentions "StudioTools" (this loader's messages, plus
 	errors and stack traces from any module in the StudioTools tree) is
 	forwarded to the server, which writes it to logs/studio-tools.log.
 
-	Install with `npm run install-plugin` (copies this file to the local
-	Plugins folder), or save it as a Local Plugin from Studio.
+	Install with `npm run install-plugin`, which packs this script and the
+	libraries into StudioToolsLoader.rbxmx in the local Plugins folder.
 ]]
 
 local HttpService = game:GetService("HttpService")
@@ -271,6 +277,23 @@ local function splitPath(filePath: string): (string, string)
 	return "", filePath
 end
 
+-- Bundled libraries, mounted into whichever build is loaded (see the header).
+local librariesFolder = script:FindFirstChild("Libraries")
+
+local function mountLibraries(root: Instance?)
+	if librariesFolder then
+		librariesFolder.Parent = root or script
+	end
+end
+
+-- Destroys a build's tree, first taking the libraries back out of it.
+local function destroyRoot(root: Instance)
+	if librariesFolder and librariesFolder.Parent == root then
+		librariesFolder.Parent = script
+	end
+	root:Destroy()
+end
+
 local function stripExtension(fileName: string): string?
 	return string.match(fileName, "^(.*)%.luau$") or string.match(fileName, "^(.*)%.lua$")
 end
@@ -351,6 +374,9 @@ end
 -- before we commit to the new build. Modules should therefore be free of
 -- side effects at require time.
 --
+-- Libraries aren't required here: they're fixed for the plugin's lifetime and
+-- load lazily.
+--
 -- The framework (everything outside Packs) is checked first, since packs
 -- depend on it; any failure there rejects the build. Then each pack is
 -- checked on its own, and failing packs are removed from the tree.
@@ -360,7 +386,7 @@ local function validateTree(root: Instance): (boolean, string?, { [string]: stri
 
 	local frameworkErrors = {}
 	for _, child in root:GetChildren() do
-		if child ~= packsFolder then
+		if child ~= packsFolder and child ~= librariesFolder then
 			local errors = requireAll(child)
 			table.move(errors, 1, #errors, #frameworkErrors + 1, frameworkErrors)
 		end
@@ -435,10 +461,12 @@ local function applyBundle(bundle: Bundle): boolean
 		return false
 	end
 	local root = rootOrErr :: Instance
+	mountLibraries(root)
 
 	local valid, validateErr, failedPacks = validateTree(root)
 	if not valid then
-		root:Destroy()
+		mountLibraries(if current then current.root else nil) -- back to the running build
+		destroyRoot(root)
 		lastFailedHash = bundle.hash
 		warnf("Build %d failed to load; keeping the previous system.\n%s", bundle.version, validateErr or "")
 		setStatus("Reload failed (see Output)")
@@ -458,19 +486,20 @@ local function applyBundle(bundle: Bundle): boolean
 
 	local system, startErr = startSystem(root, bundle, failedPacks)
 	if not system then
-		root:Destroy()
+		destroyRoot(root)
 		lastFailedHash = bundle.hash
 		warnf("Build %d failed to start; keeping the previous system.\n%s", bundle.version, startErr or "")
 		container:ClearAllChildren()
 		if previous then
 			-- The old modules are still cached by require(), so this is cheap.
+			mountLibraries(previous.root)
 			local restored, restoreErr = startSystem(previous.root, previous.bundle, previous.failedPacks)
 			if restored then
 				previous.system = restored
 				current = previous
 			else
 				warnf("Previous build %d also failed to restart:\n%s", previous.bundle.version, restoreErr or "")
-				previous.root:Destroy()
+				destroyRoot(previous.root)
 			end
 		end
 		setStatus("Reload failed (see Output)")
@@ -478,7 +507,7 @@ local function applyBundle(bundle: Bundle): boolean
 	end
 
 	if previous then
-		previous.root:Destroy()
+		destroyRoot(previous.root)
 	end
 	current = { root = root, system = system, bundle = bundle, failedPacks = failedPacks }
 	lastFailedHash = nil

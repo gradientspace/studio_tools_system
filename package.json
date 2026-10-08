@@ -11,6 +11,7 @@
     "start": "node server/server.js",
     "install-plugin": "node scripts/install-plugin.js",
     "sync-packs": "node scripts/sync-packs.js",
+    "sync-libraries": "node scripts/sync-libraries.js",
     "check": "node scripts/check.js",
     "export-sdk": "node scripts/export-sdk.js",
     "new-pack": "node scripts/new-pack.js"

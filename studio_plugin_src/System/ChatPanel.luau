@@ -1,6 +1,6 @@
 --[[
-	ChatPanel: the "Tools Agent" chat box in the viewport (backed by headless
-	Claude Code on the server; the UI deliberately doesn't say "Claude").
+	ChatPanel: the "Tools Agent" chat box in the viewport (backed by a
+	headless coding agent on the server; the UI deliberately doesn't say which).
 
 	A "Tools Agent" button at the bottom-left of the viewport opens a chat box.
 	By default it's compact: an entry field, a Send button, and a one-line
@@ -8,8 +8,9 @@
 	button expands it into the full conversation (with "New chat").
 
 	The conversation lives on the dev server (server/chat.js), which runs
-	headless Claude Code; this panel sends messages and long-polls for
-	updates, so hot reloads and Studio restarts don't lose anything.
+	the agent; this panel sends messages and long-polls for updates, so hot
+	reloads and Studio restarts don't lose anything. When the server reports
+	the agent unavailable, the input is disabled and the reason is shown.
 
 	Drawn in its own ScreenGui in CoreGui. isBlockingInput() keeps viewport
 	clicks on the chat from reaching the active tool.
@@ -112,6 +113,7 @@ function ChatPanel.new(host: any)
 	self._messages = {}
 	self._running = false
 	self._activity = ""
+	self._unavailableReason = nil :: string? -- set while the server says the agent can't run
 	self._problem = nil :: string? -- connection or request problem to show
 	self._historyDirty = true
 	self._hovered = {} :: { [Instance]: boolean }
@@ -425,6 +427,9 @@ function ChatPanel:_previewLine(): (string, Color3)
 	if self._problem then
 		return self._problem, COLORS.error
 	end
+	if self._unavailableReason then
+		return self._unavailableReason, COLORS.dim
+	end
 	if self._running then
 		return "Working… " .. self._activity, COLORS.dim
 	end
@@ -452,15 +457,20 @@ function ChatPanel:_update()
 	local text, color = self:_previewLine()
 	if expanded then
 		-- In the expanded view the history shows everything; keep only problems.
-		text = self._problem or ""
+		text = self._problem or self._unavailableReason or ""
 	end
 	self.previewText.Text = text
 	self.previewText.TextColor3 = color
 	self.expandButton.Visible = not expanded and #self._messages > 0
 	self.preview.Visible = text ~= "" or self.expandButton.Visible
 
+	local unavailable = self._unavailableReason ~= nil and not self._running
+	self.input.TextEditable = not unavailable
+	self.input.PlaceholderText = if unavailable then "Unavailable" else "What would you like to change?"
 	self.sendButton.Text = if self._running then "Stop" else "Send"
-	self.sendButton.BackgroundColor3 = if self._running then COLORS.stop else COLORS.send
+	self.sendButton.BackgroundColor3 = if self._running then COLORS.stop elseif unavailable then COLORS.button else COLORS.send
+	self.sendButton.AutoButtonColor = not unavailable
+	self.sendButton.TextColor3 = if unavailable then COLORS.dim else Color3.new(1, 1, 1)
 	self.launcher.Text = if self._running then "Tools Agent …" else "Tools Agent"
 end
 
@@ -493,7 +503,7 @@ end
 
 function ChatPanel:_send()
 	local text = self.input.Text
-	if self._running or not string.find(text, "%S") then
+	if self._running or self._unavailableReason or not string.find(text, "%S") then
 		return
 	end
 	task.spawn(function()
@@ -526,6 +536,10 @@ function ChatPanel:_apply(data: any)
 	self._revision = data.revision or self._revision
 	self._running = data.running == true
 	self._activity = data.activity or ""
+	-- Older servers don't send `available`; treat that as available.
+	self._unavailableReason = if data.available == false
+		then (if type(data.unavailableReason) == "string" then data.unavailableReason else "The Tools Agent isn't available.")
+		else nil
 	self._historyDirty = true
 	self:_update()
 end

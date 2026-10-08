@@ -96,6 +96,17 @@ Commit `SDK.luau` in the pack's repo. `npm run check` warns when it's missing or
 
 Anything under `StudioTools.System` is internal; don't require it from a pack.
 
+### Libraries
+
+Shared Luau libraries listed in studio_tools_system's `libraries.json` (e.g. `geometry3luau`) are installed with the plugin and mounted at `StudioTools/Libraries/<name>`:
+
+```lua
+local G3 = require(script:FindFirstAncestor("StudioTools").Libraries.geometry3luau)
+local DMesh3 = require(script:FindFirstAncestor("StudioTools").Libraries.geometry3luau.DMesh3)
+```
+
+`npm run check` resolves these requires, so a misspelled module is an error. A library's source is in `.libraries/<name>-<tag>/src/` of the studio_tools_system repo after `npm run sync-libraries` (or a check). Requiring a library's individual modules directly, as with `DMesh3` above, keeps their types; fields of a package table that loads modules lazily are untyped. Libraries are part of the installed plugin, not the hot-reloaded build, so a pack that needs a library (or a newer version of one) needs the user to update `libraries.json`, reinstall the plugin and restart Studio.
+
 ## Tools
 
 A tool module returns a **class** derived from `SDK.Tool`:

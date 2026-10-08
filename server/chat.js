@@ -8,10 +8,16 @@
 // is saved to .chat/conversation.json, so it survives server restarts and
 // Studio hot reloads; the Studio UI just displays it and never needs to know
 // which agent is behind it.
+//
+// If the agent can't be used (unknown STUDIO_AGENT, or its CLI doesn't run),
+// the chat reports itself unavailable to Studio in neutral terms and the
+// details go to the server log; the rest of the server is unaffected. A
+// missing CLI is re-checked periodically, so installing it is enough.
 
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { execFile } = require("node:child_process");
 const packs = require("./packs");
 const { getAgent } = require("./agents");
 const { REPO_ROOT } = require("./tree");
@@ -20,6 +26,8 @@ const STATE_DIR = path.join(REPO_ROOT, ".chat");
 const STATE_FILE = path.join(STATE_DIR, "conversation.json");
 const MAX_MESSAGES = 300;
 const POLL_TIMEOUT_MS = 15000;
+const RECHECK_MS = 30000;
+const UNAVAILABLE_TEXT = "The Tools Agent isn't available. Details are in the server log.";
 
 const INSTRUCTIONS = `You are being driven from a chat box inside Roblox Studio (the Studio Tools System's "Tools Agent").
 The user only sees your text replies, not your tool calls, commands or diffs, so end each turn with a short, plain summary of what you did or found. Keep replies brief.
@@ -28,6 +36,9 @@ Nobody can approve permission prompts here, so actions that would need approval 
 
 let log = console.log;
 let agent = null;
+// "checking" (treated as available), "available" or "unavailable"
+let availability = { state: "checking", detail: "" };
+let recheckTimer = null;
 
 // --- state -----------------------------------------------------------------
 
@@ -80,6 +91,40 @@ function addMessage(role, text) {
 function setActivity(text) {
   activity = text;
   changed();
+}
+
+// --- availability ------------------------------------------------------------
+
+function setAvailability(state, detail = "") {
+  const wasUnavailable = availability.state === "unavailable";
+  availability = { state, detail };
+  if (state === "unavailable") {
+    if (!wasUnavailable) log(`[chat] Tools Agent unavailable: ${detail}`);
+    if (agent && !recheckTimer) {
+      recheckTimer = setTimeout(() => {
+        recheckTimer = null;
+        checkAgent();
+      }, RECHECK_MS);
+      recheckTimer.unref();
+    }
+  } else if (wasUnavailable) {
+    log("[chat] Tools Agent available again");
+  }
+  if (state === "unavailable" || wasUnavailable) changed();
+}
+
+// Runs `<cli> --version` to see whether the agent can be started.
+function checkAgent() {
+  const bin = agent.bin();
+  execFile(bin, ["--version"], { timeout: 20000 }, (err, stdout) => {
+    if (err) {
+      const reason = err.code === "ENOENT" ? "not found" : err.message.split("\n")[0];
+      setAvailability("unavailable", `${agent.displayName} CLI \`${bin}\` couldn't be run (${reason}). ${agent.setupHint}`);
+    } else {
+      if (availability.state === "checking") log(`Tools Agent chat: ${agent.displayName} (${stdout.trim().split("\n")[0]})`);
+      setAvailability("available");
+    }
+  });
 }
 
 // --- running the agent -----------------------------------------------------
@@ -142,6 +187,9 @@ function runTurn(message, allowFreshRetry) {
         if (job === thisJob) job = null;
         if (thisJob.stopped) {
           addMessage("info", "Stopped.");
+        } else if (result.unavailable) {
+          addMessage("error", UNAVAILABLE_TEXT);
+          setAvailability("unavailable", `${result.unavailable}. ${agent.setupHint}`);
         } else if (result.sessionMissing && allowFreshRetry) {
           state.sessionId = null;
           saveState();
@@ -151,7 +199,7 @@ function runTurn(message, allowFreshRetry) {
         } else if (result.error || result.sessionMissing) {
           addMessage("error", result.error || "The agent session wasn't found.");
         }
-        const outcome = thisJob.stopped ? "stopped" : result.error ? "failed" : "finished";
+        const outcome = thisJob.stopped ? "stopped" : result.error || result.unavailable ? "failed" : "finished";
         log(`[chat] ${agent.id} turn ${outcome}${result.summary ? ` (${result.summary})` : ""}`);
         setActivity("");
       },
@@ -162,6 +210,7 @@ function runTurn(message, allowFreshRetry) {
 // --- API -------------------------------------------------------------------
 
 function start(message) {
+  if (availability.state === "unavailable") return { status: 503, body: { error: UNAVAILABLE_TEXT } };
   if (job) return { status: 409, body: { error: "The agent is still working on the previous message." } };
   const text = typeof message === "string" ? message.trim() : "";
   if (!text) return { status: 400, body: { error: "Empty message." } };
@@ -194,6 +243,8 @@ function snapshot(after, conversationId) {
     revision,
     running: job !== null,
     activity,
+    available: availability.state !== "unavailable",
+    unavailableReason: availability.state === "unavailable" ? UNAVAILABLE_TEXT : null,
     reset: !sameConversation,
     messages: sameConversation ? state.messages.filter((m) => m.id > after) : state.messages,
   };
@@ -227,13 +278,23 @@ function poll(req, res, url, sendJson) {
 
 function init(options = {}) {
   if (options.log) log = options.log;
-  agent = getAgent(process.env.STUDIO_AGENT);
-  log(`Tools Agent chat: ${agent.displayName}`);
   loadState();
+  try {
+    agent = getAgent(process.env.STUDIO_AGENT);
+  } catch (err) {
+    setAvailability("unavailable", `${err.message}. Fix it in .env and restart the server.`);
+    return;
+  }
+  checkAgent();
 }
 
 function agentName() {
   return agent ? agent.id : null;
+}
+
+// For the server's status endpoint.
+function status() {
+  return { agent: agentName(), state: availability.state, detail: availability.detail || undefined };
 }
 
 function shutdown() {
@@ -243,4 +304,4 @@ function shutdown() {
   }
 }
 
-module.exports = { init, start, stop, reset, poll, shutdown, agentName };
+module.exports = { init, start, stop, reset, poll, shutdown, agentName, status };
