@@ -45,7 +45,7 @@ npm run new-pack -- <dir> # scaffold a new tool pack (with agent instructions) a
 
 Studio output about the tool system (loads, failures, runtime errors) is forwarded to the server and written to `logs/studio-tools.log`, so it can be followed without looking at Studio. See "Checking and debugging" in [docs/TOOLPACKS.md](docs/TOOLPACKS.md).
 
-Restart Studio, then click **GSToolAgent** (in the GSToolAgent group of the Plugins tab) to open the palette. The first time the plugin contacts the server, Studio asks for permission to make HTTP requests to `localhost`; allow it.
+Restart Studio, then click **GSTools** (in the GSTools group of the Plugins tab) to open the palette. The first time the plugin contacts the server, Studio asks for permission to make HTTP requests to `localhost`; allow it.
 
 The server URL can be changed with the `StudioToolsSystem.ServerUrl` plugin setting. The server port can be changed with `PORT=... npm start`.
 

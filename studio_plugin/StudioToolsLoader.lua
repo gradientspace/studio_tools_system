@@ -87,13 +87,13 @@ end)
 -- Toolbar + dock widget (created once, survive hot reloads)
 ----------------------------------------------------------------------------
 
-local toolbar = plugin:CreateToolbar("GSToolAgent")
+local toolbar = plugin:CreateToolbar("GSTools")
 
 local paletteButton = toolbar:CreateButton(
 	"StudioToolsPalette",
-	"Show or hide the GSToolAgent palette",
+	"Show or hide the GSTools palette",
 	"rbxassetid://128213650030664", -- studio_plugin/icon.png, uploaded as an image asset
-	"GSToolAgent"
+	"GSTools"
 )
 paletteButton.ClickableWhenViewportHidden = true
 
@@ -106,7 +106,7 @@ local widget = plugin:CreateDockWidgetPluginGuiAsync(
 	DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Left, false, false, 280, 480, 220, 240)
 )
 widget.Name = "StudioToolsSystem"
-widget.Title = "GSToolAgent"
+widget.Title = "GSTools"
 widget.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
 paletteButton:SetActive(widget.Enabled)
