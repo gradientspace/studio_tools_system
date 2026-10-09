@@ -21,6 +21,7 @@ local CoreGui = game:GetService("CoreGui")
 local UserInputService = game:GetService("UserInputService")
 
 local SDK = require(script.Parent.Parent.SDK)
+local AgentRequests = require(script.Parent.AgentRequests)
 local Maid = SDK.Maid
 local Signal = SDK.Signal
 
@@ -247,6 +248,29 @@ function ToolContext:refreshShutdownButtons()
 	if self._refreshShutdownButtons then
 		self._refreshShutdownButtons()
 	end
+end
+
+-- Tools Agent -------------------------------------------------------------
+
+-- Sends a prompt to the Tools Agent (the coding agent behind the chat, which
+-- can edit the place through the Roblox Studio MCP) and returns an
+-- SDK.AgentRequest right away; it never yields. Wait for the result with
+-- request:await() (in a thread that may yield) or request:onFinished(fn).
+-- The request outlives the tool unless options.cancelOnDeactivate is set.
+function ToolContext:askAgent(prompt: string, options: SDK.AskAgentOptions?): SDK.AgentRequest
+	if type(prompt) ~= "string" or not string.find(prompt, "%S") then
+		error("ctx:askAgent: prompt must be a non-empty string", 2)
+	end
+	local request = AgentRequests.submit(self.host.serverUrl, prompt, {
+		toolId = self.toolId,
+		name = tostring(self.definition.name or self.toolId),
+	})
+	if options and options.cancelOnDeactivate then
+		self:addCleanup(function()
+			request:cancel()
+		end)
+	end
+	return request
 end
 
 -- Misc ------------------------------------------------------------------

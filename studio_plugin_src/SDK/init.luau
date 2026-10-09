@@ -49,6 +49,10 @@ export type SingleClickInputBehavior = Types.SingleClickInputBehavior
 export type ClickDragInputBehavior = Types.ClickDragInputBehavior
 export type ClickOrDragInputBehavior = Types.ClickOrDragInputBehavior
 export type HoverInputBehavior = Types.HoverInputBehavior
+export type AgentRequestStatus = Types.AgentRequestStatus
+export type AgentResult = Types.AgentResult
+export type AgentRequest = Types.AgentRequest
+export type AskAgentOptions = Types.AskAgentOptions
 
 -- Bumped on breaking changes to the tool/pack contract. (server/sdk.js reads
 -- this line when generating pack SDK files, so keep the format.)

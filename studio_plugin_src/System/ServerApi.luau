@@ -3,7 +3,8 @@
 
 	Every request carries the X-Studio-Tools header the server requires for
 	POSTs (see server/server.js). Never throws: returns ok, data (decoded
-	JSON body) or ok = false and an error message.
+	JSON body) or ok = false and an error message, plus the HTTP status code
+	(nil if the server couldn't be reached).
 ]]
 
 local HttpService = game:GetService("HttpService")
@@ -13,7 +14,7 @@ local ServerApi = {}
 local HEADERS = { ["X-Studio-Tools"] = "1" }
 
 -- method: "GET" | "POST"; body is JSON-encoded for POST.
-function ServerApi.request(serverUrl: string, method: string, path: string, body: any?): (boolean, any)
+function ServerApi.request(serverUrl: string, method: string, path: string, body: any?): (boolean, any, number?)
 	local request = {
 		Url = serverUrl .. path,
 		Method = method,
@@ -34,9 +35,9 @@ function ServerApi.request(serverUrl: string, method: string, path: string, body
 	end
 	if not response.Success then
 		local message = if type(data) == "table" and data.error then data.error else ("HTTP " .. response.StatusCode)
-		return false, message
+		return false, message, response.StatusCode
 	end
-	return true, data
+	return true, data, response.StatusCode
 end
 
 return ServerApi

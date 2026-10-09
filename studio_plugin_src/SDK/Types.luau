@@ -192,6 +192,44 @@ export type UndoRecording = {
 	cancel: () -> (),
 }
 
+-- Tools Agent requests (ctx:askAgent) --------------------------------------
+
+-- "sending": not accepted by the server yet; "queued": waiting for the agent
+-- to finish earlier work; "running": the agent is working on it. The other
+-- three are final.
+export type AgentRequestStatus = "sending" | "queued" | "running" | "done" | "failed" | "cancelled"
+
+-- How an agent request ended.
+export type AgentResult = {
+	ok: boolean, -- true when status is "done"
+	status: AgentRequestStatus, -- "done", "failed" or "cancelled"
+	reply: string?, -- the agent's final text reply (when done)
+	error: string?, -- why it failed
+}
+
+export type AgentRequest = {
+	id: string?, -- the server's id, once accepted
+	status: AgentRequestStatus,
+	position: number?, -- place in the queue while "queued" (1 = next)
+	result: AgentResult?, -- set when finished
+	isFinished: (self: AgentRequest) -> boolean,
+	-- Yields until the request finishes. Input behavior callbacks must not
+	-- yield, so call this from task.spawn, or use onFinished.
+	await: (self: AgentRequest) -> AgentResult,
+	-- fn(result) in its own thread when the request finishes (right away if it has).
+	onFinished: (self: AgentRequest, fn: (AgentResult) -> ()) -> (),
+	-- Finishes the request as "cancelled" now. The server drops it from the
+	-- queue, or stops the agent if it's working on it (changes it already
+	-- made to the place stay).
+	cancel: (self: AgentRequest) -> (),
+}
+
+export type AskAgentOptions = {
+	-- Cancel the request if the tool deactivates before it finishes. Default
+	-- false: requests outlive the tool, so one can be sent on Accept.
+	cancelOnDeactivate: boolean?,
+}
+
 export type ToolContext = {
 	plugin: Plugin,
 	toolId: string, -- "<packId>/<toolId>"
@@ -233,6 +271,10 @@ export type ToolContext = {
 
 	beginUndo: (self: ToolContext, name: string) -> UndoRecording,
 	recordUndo: (self: ToolContext, name: string, fn: (...any) -> ...any, ...any) -> (boolean, any),
+
+	-- Sends a prompt to the Tools Agent, which can edit the place through the
+	-- Roblox Studio MCP. Returns right away (never yields).
+	askAgent: (self: ToolContext, prompt: string, options: AskAgentOptions?) -> AgentRequest,
 
 	log: (self: ToolContext, ...any) -> (),
 }

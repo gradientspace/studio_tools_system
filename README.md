@@ -88,6 +88,7 @@ The **Tools Agent** button at the bottom-left of the viewport opens a chat box c
 - **System prompt:** `server/agent-instructions.md` holds the chat-specific instructions, on top of `AGENTS.md`. Claude Code gets them with `--append-system-prompt` on every message. Codex gets them as `developer_instructions` when a session starts, so after editing the file, use **New chat** for Codex to see the change.
 - **Default view:** just the entry field and a one-line preview of the latest reply or current activity. **History** expands the full conversation, with a **New chat** button.
 - **Stopping:** while the agent is working, **Send** becomes **Stop**.
+- **Requests from tools:** tools can send the agent prompts with `ctx:askAgent`, e.g. to edit the place through the Roblox Studio MCP when you click something. They appear in the chat labeled with the tool's name, queue behind whatever the agent is doing, and the agent's final reply goes back to the tool. **Stop** also cancels queued requests.
 - **Context:** each message resumes the same agent session, so context carries over between requests. The conversation is kept in `.chat/` (gitignored) and survives server restarts and hot reloads.
 - **Choosing the agent:** copy `.env.example` to `.env` (gitignored) and set `STUDIO_AGENT=claude` or `STUDIO_AGENT=codex`, then restart the server. Switching agents starts a new agent session; the chat history stays. The CLI must be installed and signed in on the machine running the server; `CLAUDE_BIN` / `CODEX_BIN` point to it if it isn't on the `PATH`. `STUDIO_AGENT_MODEL` overrides the model.
 - **Permissions:**
@@ -181,6 +182,7 @@ Tools can extend other tool classes (`Base:extend({...})`, overriding methods an
 | `ctx:beginUndo(name)` | Open a waypoint across multiple events; returns `{ commit, cancel }` |
 | `ctx:confirm({ title?, message, confirmText?, cancelText? })` | Modal confirmation dialog in the viewport; yields, returns true/false |
 | `ctx:refreshShutdownButtons()` | Re-query `canAccept()` now (Accept/Cancel tools) |
+| `ctx:askAgent(prompt, { cancelOnDeactivate? }?)` | Send a prompt to the Tools Agent, which can edit the place through the Roblox Studio MCP. Returns an `AgentRequest` right away: `:await()` (yields), `:onFinished(fn)`, `:cancel()`, `.status`. See "Tools Agent requests" in docs/TOOLPACKS.md |
 | `ctx:connect(signal, fn)`, `ctx:addCleanup(task)` | Auto-cleaned on deactivate |
 | `ctx:log(...)` | Prefixed print |
 

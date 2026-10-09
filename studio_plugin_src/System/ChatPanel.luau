@@ -12,6 +12,9 @@
 	reloads and Studio restarts don't lose anything. When the server reports
 	the agent unavailable, the input is disabled and the reason is shown.
 
+	Tools can send prompts too (ctx:askAgent). They show up as user messages
+	labeled with the tool's name, and the status line counts the ones queued.
+
 	Drawn in its own ScreenGui in CoreGui. isBlockingInput() keeps viewport
 	clicks on the chat from reaching the active tool.
 ]]
@@ -118,6 +121,7 @@ function ChatPanel.new(host: any)
 	self._messages = {}
 	self._running = false
 	self._activity = ""
+	self._queued = 0 -- tool requests waiting for the agent
 	self._unavailableReason = nil :: string? -- set while the server says the agent can't run
 	self._problem = nil :: string? -- connection or request problem to show
 	self._historyDirty = true
@@ -426,7 +430,9 @@ function ChatPanel:_messageView(message: any, order: number): GuiObject
 		TextWrapped = true,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextYAlignment = Enum.TextYAlignment.Top,
-		Text = (style.prefix or "") .. message.text,
+		Text = (style.prefix or "")
+			.. (if type(message.source) == "string" then "[" .. message.source .. "] " else "")
+			.. message.text,
 	}, { corner(4), padding(6, 3) })
 	if style.selectable then
 		view.TextEditable = false
@@ -464,11 +470,19 @@ function ChatPanel:_renderHistory()
 			TextColor3 = COLORS.dim,
 			TextWrapped = true,
 			TextXAlignment = Enum.TextXAlignment.Left,
-			Text = "Working… " .. self._activity,
+			Text = self:_workingText(),
 			Parent = self.history,
 		})
 	end
 	self._stickToBottom = true
+end
+
+function ChatPanel:_workingText(): string
+	local text = "Working… " .. self._activity
+	if self._queued > 0 then
+		text ..= string.format(" (%d more queued)", self._queued)
+	end
+	return text
 end
 
 -- The one-line summary shown in compact mode.
@@ -480,7 +494,7 @@ function ChatPanel:_previewLine(): (string, Color3)
 		return self._unavailableReason, COLORS.dim
 	end
 	if self._running then
-		return "Working… " .. self._activity, COLORS.dim
+		return self:_workingText(), COLORS.dim
 	end
 	for i = #self._messages, 1, -1 do
 		local message = self._messages[i]
@@ -585,6 +599,7 @@ function ChatPanel:_apply(data: any)
 	self._revision = data.revision or self._revision
 	self._running = data.running == true
 	self._activity = data.activity or ""
+	self._queued = if type(data.queued) == "number" then data.queued else 0
 	-- Older servers don't send `available`; treat that as available.
 	self._unavailableReason = if data.available == false
 		then (if type(data.unavailableReason) == "string" then data.unavailableReason else "The Tools Agent isn't available.")

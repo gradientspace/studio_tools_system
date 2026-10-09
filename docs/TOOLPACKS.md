@@ -354,7 +354,36 @@ The `ctx` passed to tools. Its type is `SDK.ToolContext`; the README has the ful
 - **Picking:** `raycastAt`, `partAt`, at an input point.
 - **Previews:** `createBoxPreview`, `createHighlight`.
 - **Undo:** `recordUndo`, `beginUndo`, `onUndoRedo`.
+- **Tools Agent:** `askAgent` (see below).
 - **Cleanup:** `connect`, `addCleanup`.
+
+### Tools Agent requests
+
+`ctx:askAgent(prompt, options?)` sends a prompt to the Tools Agent, the coding agent behind the chat box. The agent can edit the open place through the Roblox Studio MCP, so a tool can hand it work, e.g. "make the clicked part look like a stone wall". The call never yields. It returns an `SDK.AgentRequest`, and the result arrives later:
+
+```lua
+function MyTool:deactivate(ctx: SDK.ToolContext, reason: SDK.ShutdownReason)
+	if reason ~= SDK.ShutdownReason.Accept or not self.part then
+		return
+	end
+	local request = ctx:askAgent(`Add a sign to the front of {self.part:GetFullName()} that says "Shop".`)
+	request:onFinished(function(result: SDK.AgentResult)
+		if result.ok then
+			print("Agent:", result.reply)
+		else
+			warn("Agent request", result.status, result.error)
+		end
+	end)
+end
+```
+
+- **Waiting.** `request:await()` yields until the request finishes and returns the `SDK.AgentResult`: `ok`, `status` (`"done"`, `"failed"` or `"cancelled"`), `reply` (the agent's final text reply) and `error`. Input behavior callbacks must not yield, so call `await` from `task.spawn`, or use `request:onFinished(fn)`. Requests usually take tens of seconds or more.
+- **Progress.** `request.status` is `"sending"`, `"queued"` (`request.position` is its place in the queue), `"running"`, then one of the final statuses. `request.result` is set once it's finished.
+- **Queueing.** Requests run in the chat's agent session, one at a time, after whatever the agent is already doing. Each shows up in the chat as a message labeled with the tool's name, and the agent's replies appear there too. The chat's Stop button stops the current request and cancels the queued ones. At most 10 can be queued.
+- **Cancelling.** `request:cancel()` finishes it as `"cancelled"` right away. A queued request is dropped; a running one stops the agent, and changes it already made to the place stay.
+- **Lifetime.** A request outlives the tool that sent it, so a tool can send one when it's accepted. Pass `{ cancelOnDeactivate = true }` to cancel it when the tool deactivates instead. Requests also survive hot reloads, but not a restart of the dev server: they then fail.
+- **Prompts.** The agent is told that the prompt comes from a tool, that it should act on the place through MCP rather than edit code, and that its final reply goes back to the tool. Include what it needs to find things, such as `instance:GetFullName()`. If the tool needs to parse the reply, ask for an exact format ("Reply with only the new part's full name").
+- **Failures.** A request fails with an `error` when the agent isn't available, the server can't be reached, or the agent hits an error. Changes the agent makes through MCP aren't part of the tool's undo recordings.
 
 ## Rules for pack code
 

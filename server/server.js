@@ -19,6 +19,10 @@
 //                              the coding agent behind it is set in .env)
 //   GET  /chat/poll         -> conversation updates (long-poll)
 //   POST /chat/stop, POST /chat/reset
+//   POST /chat/requests     <- { prompt, toolId, toolName }: a prompt from a tool (ctx:askAgent),
+//                              queued behind the agent's current work -> { id, status, ... }
+//   GET  /chat/requests/poll?id=&status= -> that request's status/reply (long-poll)
+//   POST /chat/requests/cancel <- { id }
 //
 // Security: requests must address the server as localhost (blocks DNS
 // rebinding), and POSTs must carry an `X-Studio-Tools: 1` header, which a web
@@ -230,6 +234,10 @@ function handlePost(req, res, url) {
       return reply(chat.stop());
     case "/chat/reset":
       return reply(chat.reset());
+    case "/chat/requests":
+      return withBody((body) => reply(chat.submitRequest(body)));
+    case "/chat/requests/cancel":
+      return withBody((body) => reply(chat.cancelRequest(body.id)));
     default:
       return sendJson(res, 404, { error: "not found" });
   }
@@ -264,6 +272,9 @@ function handleRequest(req, res) {
 
     case "/chat/poll":
       return chat.poll(req, res, url, sendJson);
+
+    case "/chat/requests/poll":
+      return chat.pollRequest(req, res, url, sendJson);
 
     case "/poll": {
       const since = url.searchParams.get("since") || "";
