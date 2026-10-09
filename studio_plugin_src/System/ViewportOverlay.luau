@@ -9,8 +9,8 @@
 	touching the place. ToolManager decides what to show; this module only
 	draws it and reports clicks.
 
-	isBlockingInput() lets ToolContext ignore viewport clicks that land on
-	the buttons, and all viewport clicks while the dialog is open.
+	isBlockingInput() lets the InputManager ignore viewport clicks that land
+	on the buttons, and all viewport clicks while the dialog is open.
 ]]
 
 local CoreGui = game:GetService("CoreGui")

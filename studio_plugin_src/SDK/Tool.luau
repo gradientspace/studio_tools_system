@@ -39,6 +39,13 @@
 	and return false to keep the tool running. For Accept/Cancel tools,
 	canAccept() is polled to enable or disable the Accept button.
 
+	Tools take mouse input through input behaviors (SDK.InputBehavior and
+	the standard ones built on it), added with self:addInputBehavior(),
+	usually in activate(). The system routes input to them, decides which
+	one captures the mouse, and ends captures when the tool shuts down.
+	A tool that manages its own list can override getInputBehaviors() and
+	call self.ctx:inputBehaviorsChanged() whenever its result changes.
+
 	apiVersion is deliberately not defined here: every tool, or a base class
 	in its own pack, must state which API version it was written against.
 ]]
@@ -89,6 +96,37 @@ end
 -- Return false to keep the tool running. Default: always allow.
 function Tool:confirmShutdown(_reason: string, _trigger: string): boolean
 	return true
+end
+
+-- The behaviors that receive the tool's mouse input. The system calls this
+-- after activate() and after ctx:inputBehaviorsChanged().
+function Tool:getInputBehaviors(): { any }
+	return rawget(self, "_inputBehaviors") or {}
+end
+
+-- Adds an input behavior (it receives input from the next update on).
+-- Returns the behavior.
+function Tool:addInputBehavior<T>(behavior: T): T
+	local behaviors = rawget(self, "_inputBehaviors")
+	if not behaviors then
+		behaviors = {}
+		self._inputBehaviors = behaviors
+	end
+	if not table.find(behaviors, behavior) then
+		table.insert(behaviors, behavior)
+		self.ctx:inputBehaviorsChanged()
+	end
+	return behavior
+end
+
+-- Removes an input behavior, ending its capture or hover if it has one.
+function Tool:removeInputBehavior(behavior: any)
+	local behaviors = rawget(self, "_inputBehaviors")
+	local index = behaviors and table.find(behaviors, behavior)
+	if index then
+		table.remove(behaviors, index)
+		self.ctx:inputBehaviorsChanged()
+	end
 end
 
 -- Polled while an Accept/Cancel tool is active. Return false to disable the

@@ -20,19 +20,36 @@ local NudgeUp = SDK.Tool:extend({
 function NudgeUp:activate(ctx: SDK.ToolContext)
 	local highlight = ctx:createHighlight()
 
-	ctx:onMouseMove(function()
-		highlight.Adornee = ctx:partUnderMouse()
-	end)
+	-- Hit test shared by both behaviors: the distance to the part under the
+	-- point, or nil if there's none.
+	local function hitTest(point: SDK.InputPoint): number?
+		local part, hit = ctx:partAt(point)
+		return if part and hit then hit.Distance else nil
+	end
 
-	ctx:onMouseDown(function()
-		local part = ctx:partUnderMouse()
-		if not part then
-			return
-		end
-		ctx:recordUndo("Nudge Up", function()
-			part.CFrame += Vector3.new(0, ctx.settings.step, 0)
-		end)
-	end)
+	-- Highlight the part under the mouse.
+	self:addInputBehavior(SDK.HoverInputBehavior:new({
+		hitTest = hitTest,
+		onUpdateHover = function(point)
+			highlight.Adornee = ctx:partAt(point)
+		end,
+		onEndHover = function()
+			highlight.Adornee = nil
+		end,
+	}))
+
+	-- Click a part to nudge it.
+	self:addInputBehavior(SDK.SingleClickInputBehavior:new({
+		hitTest = hitTest,
+		onClick = function(point)
+			local part = ctx:partAt(point)
+			if part then
+				ctx:recordUndo("Nudge Up", function()
+					part.CFrame += Vector3.new(0, ctx.settings.step, 0)
+				end)
+			end
+		end,
+	}))
 end
 
 return NudgeUp

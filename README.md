@@ -123,25 +123,40 @@ local MyTool = SDK.Tool:extend({
 -- `self` is a fresh instance per activation; `self.ctx` is the ToolContext.
 function MyTool:activate(ctx: SDK.ToolContext)
 	self.highlight = ctx:createHighlight()
-	ctx:onMouseMove(function()
-		self.highlight.Adornee = ctx:partUnderMouse()
-	end)
-	ctx:onMouseDown(function()
-		local part = ctx:partUnderMouse()
-		if part then
-			ctx:recordUndo("My Tool", function()
-				part.Color = ctx.settings.color
-			end)
-		end
-	end)
+	local function hitTest(point: SDK.InputPoint): number?
+		local part, hit = ctx:partAt(point)
+		return if part and hit then hit.Distance else nil
+	end
+	self:addInputBehavior(SDK.HoverInputBehavior:new({
+		hitTest = hitTest,
+		onUpdateHover = function(point)
+			self.highlight.Adornee = ctx:partAt(point)
+		end,
+		onEndHover = function()
+			self.highlight.Adornee = nil
+		end,
+	}))
+	self:addInputBehavior(SDK.SingleClickInputBehavior:new({
+		hitTest = hitTest,
+		onClick = function(point)
+			local part = ctx:partAt(point)
+			if part then
+				ctx:recordUndo("My Tool", function()
+					part.Color = ctx.settings.color
+				end)
+			end
+		end,
+	}))
 end
 
 return MyTool
 ```
 
+Tools never listen to the mouse directly. They add **input behaviors**, and the system's InputManager routes mouse input to them: it decides which behavior captures the mouse (nearest hit wins), runs hover, and ends captures when the tool exits or Studio loses focus. The SDK provides standard behaviors: `SingleClickInputBehavior`, `ClickDragInputBehavior`, `ClickOrDragInputBehavior` and `HoverInputBehavior`. Custom ones extend `SDK.InputBehavior`. See "Input" in docs/TOOLPACKS.md.
+
 While a tool is active, the system shows a **shutdown overlay** at the bottom of the viewport: a Done button by default, or Accept/Cancel. Tools configure it with a `shutdown` field, and `deactivate(ctx, reason)` receives the button the user clicked, or `Force` (see docs/TOOLPACKS.md).
 
-Tools can extend other tool classes (`Base:extend({...})`, overriding methods and calling `Base.method(self, ...)`). In the core pack, Paint, Erase and QuickMove all build on `Shared/PartPickerTool`. The full contract, including inheritance, settings, manifest and versioning rules, is in [docs/TOOLPACKS.md](docs/TOOLPACKS.md).
+Tools can extend other tool classes (`Base:extend({...})`, overriding methods and calling `Base.method(self, ...)`). In the core pack, Paint, Erase and Move all build on `Shared/PartPickerTool`. The full contract, including inheritance, settings, manifest and versioning rules, is in [docs/TOOLPACKS.md](docs/TOOLPACKS.md).
 
 ### ToolContext API
 
@@ -150,15 +165,16 @@ Tools can extend other tool classes (`Base:extend({...})`, overriding methods an
 | `ctx.settings` | Live table of the tool's setting values |
 | `ctx.toolId` | Qualified id, `"<packId>/<toolId>"` |
 | `ctx.state` | Scratch table for the tool |
-| `ctx.plugin`, `ctx.mouse` | The `Plugin` and `PluginMouse` |
-| `ctx:onMouseMove(fn)`, `onMouseDown(fn)`, `onMouseUp(fn)` | Viewport mouse input (left button); `onMouseDown` skips clicks on the shutdown overlay |
+| `ctx.plugin` | The `Plugin` |
+| `ctx:inputBehaviorsChanged()` | Tell the system the tool's `getInputBehaviors()` changed (`self:addInputBehavior` / `removeInputBehavior` do this) |
+| `ctx:refreshInput()` | Re-run hover and capture at the current mouse position (automatic after undo/redo, setting edits and camera moves) |
 | `ctx:isKeyDown(...KeyCode)`, `ctx:isShiftDown()` | Modifier/key state |
 | `ctx:onKey(fn(input, isDown))` | Keyboard input in the viewport |
 | `ctx:onSettingChanged(fn(key, value))` | User edited a setting in the palette |
 | `ctx:onUndoRedo(fn(action, waypointName))` | User undid/redid while the tool is active; resync any state about the place |
-| `ctx:raycast(maxDistance?, exclude?)` | Raycast from the camera through the cursor |
-| `ctx:partUnderMouse()` | Unlocked, non-terrain `BasePart` under the cursor, plus the `RaycastResult` |
-| `ctx:excludeFromRaycast(instance)` | Ignore an instance in `raycast` |
+| `ctx:raycastAt(point, maxDistance?, exclude?)` | Raycast along an `InputPoint`'s ray (input behaviors pass points to their callbacks) |
+| `ctx:partAt(point)` | Unlocked, non-terrain `BasePart` at the point, plus the `RaycastResult` |
+| `ctx:excludeFromRaycast(instance)` | Ignore an instance in `raycastAt` and `partAt` |
 | `ctx:createBoxPreview()` | `BoxHandleAdornment` in world space (CoreGui; never saved, no undo) |
 | `ctx:createHighlight(color?)` | `SelectionBox` in CoreGui; set `.Adornee` |
 | `ctx:recordUndo(name, fn, ...)` | Run `fn` as one undo waypoint (cancelled if it errors) |

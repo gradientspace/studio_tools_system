@@ -9,7 +9,9 @@
 	it": the tool remembers each part's original color/material and recounts
 	after undo/redo, so its state stays right however undo affects the parts.
 
-	Extends PartPickerTool, adding drag-painting on top of its click handling.
+	Extends PartPickerTool, replacing its click with a ClickDragInputBehavior:
+	pressing on a part paints it, and dragging paints every part the mouse
+	crosses until the button is released.
 ]]
 
 local SDK = require(script.Parent.Parent.SDK)
@@ -19,7 +21,7 @@ local PartPickerTool = require(script.Parent.Parent.Shared.PartPickerTool)
 local PaintBlock = PartPickerTool:extend({
 	apiVersion = 1,
 	id = "PaintBlock",
-	version = "1.1.0",
+	version = "1.2.0",
 	name = "Paint",
 	description = "Click or drag across parts to paint them. Accept keeps the painting; Cancel reverts it. Locked parts are skipped.",
 	order = 20,
@@ -63,22 +65,37 @@ function PaintBlock:paint(part: BasePart)
 	self:recount()
 end
 
--- Mouse down starts painting; dragging keeps painting until mouse up.
-function PaintBlock:onPick(part: BasePart)
-	self.painting = true
-	self:paint(part)
-	self.ctx:refreshShutdownButtons()
+-- Paints the pickable part at the point, if any.
+function PaintBlock:paintAt(point: SDK.InputPoint)
+	local part = self:getTarget(point)
+	self:setHighlight(part)
+	if part then
+		self:paint(part)
+		self.ctx:refreshShutdownButtons()
+	end
 end
 
-function PaintBlock:updateHover()
-	PartPickerTool.updateHover(self)
+-- The highlight shows the paint color.
+function PaintBlock:setHighlight(part: BasePart?)
 	local color = self.ctx.settings.color
 	self.highlight.Color3 = color
 	self.highlight.SurfaceColor3 = color
-	local target = self.highlight.Adornee
-	if self.painting and target then
-		self:paint(target :: BasePart)
-	end
+	PartPickerTool.setHighlight(self, part)
+end
+
+function PaintBlock:createPickBehavior(): SDK.InputBehavior
+	return SDK.ClickDragInputBehavior:new({
+		id = "Paint",
+		hitTest = function(point)
+			return self:hitTest(point)
+		end,
+		onBeginDrag = function(point)
+			self:paintAt(point)
+		end,
+		onUpdateDrag = function(point)
+			self:paintAt(point)
+		end,
+	})
 end
 
 function PaintBlock:canAccept(): (boolean, string?)
@@ -107,14 +124,10 @@ end
 function PaintBlock:activate(ctx: SDK.ToolContext)
 	self.originals = {} -- part -> { color, material } before this session touched it
 	self.paintedCount = 0
-	self.painting = false
 	-- One recording for the whole session: cancelling it reverts the painting.
 	self.session = ctx:beginUndo("Paint")
 
 	PartPickerTool.activate(self, ctx)
-	ctx:onMouseUp(function()
-		self.painting = false
-	end)
 	ctx:onUndoRedo(function(action, waypoint)
 		self:recount()
 		ctx:refreshShutdownButtons()

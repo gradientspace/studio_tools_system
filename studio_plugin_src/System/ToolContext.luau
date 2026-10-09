@@ -7,7 +7,6 @@
 
 	Fields:
 	  ctx.plugin       the Plugin object
-	  ctx.mouse        PluginMouse
 	  ctx.toolId       qualified tool id, "<packId>/<toolId>"
 	  ctx.settings     live table of this tool's setting values
 	  ctx.state        scratch table for the tool's own use
@@ -30,15 +29,14 @@ ToolContext.__index = ToolContext
 
 -- `entry` is a ToolManager entry: { id = "<packId>/<toolId>", definition = class }.
 -- options (provided by ToolManager):
---   isInputBlocked()           true while viewport clicks shouldn't reach the
---                              tool (mouse over system UI, or a dialog is open)
 --   confirm(options)           shows the system confirmation dialog (yields)
 --   refreshShutdownButtons()   re-queries canAccept()
+--   inputBehaviorsChanged()    re-collects the tool's input behaviors
+--   refreshInput()             re-runs input at the current mouse position
 function ToolContext.new(host: any, entry: any, settings: { [string]: any }, options: any?)
 	local self = setmetatable({}, ToolContext)
 	self.host = host
 	self.plugin = host.plugin :: Plugin
-	self.mouse = host.plugin:GetMouse() :: PluginMouse
 	self.toolId = entry.id
 	self.definition = entry.definition
 	self.settings = settings
@@ -47,11 +45,10 @@ function ToolContext.new(host: any, entry: any, settings: { [string]: any }, opt
 	self._settingChanged = self._maid:add(Signal.new())
 	self._raycastExclude = {} :: { Instance }
 	options = options or {}
-	self._isInputBlocked = options.isInputBlocked or function()
-		return false
-	end
 	self._confirm = options.confirm
 	self._refreshShutdownButtons = options.refreshShutdownButtons
+	self._inputBehaviorsChanged = options.inputBehaviorsChanged
+	self._refreshInput = options.refreshInput
 	return self
 end
 
@@ -67,23 +64,22 @@ function ToolContext:connect(signal: RBXScriptSignal, fn: (...any) -> ()): RBXSc
 end
 
 -- Input -----------------------------------------------------------------
+-- Tools take mouse input only through input behaviors
+-- (Tool:addInputBehavior), which the InputManager routes. Keyboard state
+-- and key events are available here.
 
-function ToolContext:onMouseMove(fn: () -> ())
-	return self:connect(self.mouse.Move, fn)
+-- Tells the system that the tool's getInputBehaviors() result changed.
+function ToolContext:inputBehaviorsChanged()
+	if self._inputBehaviorsChanged then
+		self._inputBehaviorsChanged()
+	end
 end
 
--- Not fired for clicks on system UI in the viewport (e.g. the Done button),
--- or while a confirmation dialog is open.
-function ToolContext:onMouseDown(fn: () -> ())
-	return self:connect(self.mouse.Button1Down, function()
-		if not self._isInputBlocked() then
-			fn()
-		end
-	end)
-end
-
-function ToolContext:onMouseUp(fn: () -> ())
-	return self:connect(self.mouse.Button1Up, fn)
+-- Re-runs hover and capture handling at the current mouse position.
+function ToolContext:refreshInput()
+	if self._refreshInput then
+		self._refreshInput()
+	end
 end
 
 function ToolContext:isKeyDown(...: Enum.KeyCode): boolean
@@ -124,14 +120,15 @@ end
 
 -- Raycasting ------------------------------------------------------------
 
--- Instances that ctx:raycast() should ignore for the lifetime of the tool.
+-- Instances that ctx:raycastAt() should ignore for the lifetime of the tool.
 function ToolContext:excludeFromRaycast(instance: Instance)
 	table.insert(self._raycastExclude, instance)
 end
 
--- Casts a ray from the camera through the mouse cursor.
-function ToolContext:raycast(maxDistance: number?, extraExclude: { Instance }?): RaycastResult?
-	local unitRay = self.mouse.UnitRay
+-- Casts the ray of an input point (see SDK.InputPoint): from the camera
+-- through that point in the viewport.
+function ToolContext:raycastAt(point: SDK.InputPoint, maxDistance: number?, extraExclude: { Instance }?): RaycastResult?
+	local unitRay = point.ray
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	local exclude = table.clone(self._raycastExclude)
@@ -142,9 +139,10 @@ function ToolContext:raycast(maxDistance: number?, extraExclude: { Instance }?):
 	return workspace:Raycast(unitRay.Origin, unitRay.Direction * (maxDistance or 10000), params)
 end
 
--- Returns the unlocked BasePart under the mouse (never Terrain), plus the raycast result.
-function ToolContext:partUnderMouse(): (BasePart?, RaycastResult?)
-	local hit = self:raycast()
+-- Returns the unlocked BasePart (never Terrain) at an input point, plus the
+-- raycast result.
+function ToolContext:partAt(point: SDK.InputPoint): (BasePart?, RaycastResult?)
+	local hit = self:raycastAt(point)
 	local part = hit and hit.Instance
 	if part and part:IsA("BasePart") and not part:IsA("Terrain") and not part.Locked then
 		return part, hit

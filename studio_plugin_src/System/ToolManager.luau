@@ -27,11 +27,18 @@
 	Accept/Cancel tools), is a shutdown *request*: the tool's
 	confirmShutdown(reason, trigger) runs first and may refuse. For
 	Accept/Cancel tools, canAccept() is polled to enable/disable Accept.
+
+	Mouse input reaches the active tool only through its input behaviors,
+	routed by the InputManager. ToolManager attaches the tool after
+	activate(), forwards ctx:inputBehaviorsChanged() / ctx:refreshInput(),
+	refreshes input after setting changes, and detaches the tool (ending
+	any capture) before its deactivate() runs.
 ]]
 
 local UserInputService = game:GetService("UserInputService")
 
 local SDK = require(script.Parent.Parent.SDK)
+local InputManager = require(script.Parent.InputManager)
 local SettingsStore = require(script.Parent.SettingsStore)
 local ViewportOverlay = require(script.Parent.ViewportOverlay)
 local ToolContext = require(script.Parent.ToolContext)
@@ -144,6 +151,11 @@ function ToolManager.new(host: any, packsFolder: Instance?, options: any?)
 	self._maid:add(self.changed)
 	self.overlay = self._maid:add(ViewportOverlay.new())
 	self._extraInputBlocked = options and options.isInputBlocked
+	self.input = self._maid:add(InputManager.new(self.plugin, {
+		isInputBlocked = function()
+			return self:_isInputBlocked()
+		end,
+	}))
 
 	local build = host.build or {}
 	self:_loadPacks(packsFolder, build.packs or {}, build.failedPacks or {})
@@ -167,6 +179,12 @@ function ToolManager.new(host: any, packsFolder: Instance?, options: any?)
 	end))
 
 	return self
+end
+
+-- True while viewport clicks shouldn't reach the tool: the mouse is over
+-- system UI (shutdown buttons, chat box) or a dialog is open.
+function ToolManager:_isInputBlocked(): boolean
+	return self.overlay:isBlockingInput() or (self._extraInputBlocked ~= nil and self._extraInputBlocked())
 end
 
 -- Returns the tab with this name, creating it (at the end) if needed.
@@ -264,15 +282,22 @@ function ToolManager:activate(id: string)
 
 	local ctx
 	ctx = ToolContext.new(self.host, entry, self.store:get(entry), {
-		isInputBlocked = function()
-			return self.overlay:isBlockingInput() or (self._extraInputBlocked ~= nil and self._extraInputBlocked())
-		end,
 		confirm = function(options)
 			return self.overlay:confirm(options)
 		end,
 		refreshShutdownButtons = function()
 			if self.activeContext == ctx then
 				self:refreshShutdownButtons()
+			end
+		end,
+		inputBehaviorsChanged = function()
+			if self.activeContext == ctx then
+				self.input:refreshBehaviors()
+			end
+		end,
+		refreshInput = function()
+			if self.activeContext == ctx then
+				self.input:refresh()
 			end
 		end,
 	})
@@ -288,6 +313,9 @@ function ToolManager:activate(id: string)
 		self:deactivate(Reason.Force)
 		return
 	end
+	self.input:setSource(function()
+		return instance:getInputBehaviors()
+	end, id)
 
 	local gotOptions, options = xpcall(instance.getShutdownOptions, debug.traceback, instance)
 	if not gotOptions or type(options) ~= "table" then
@@ -381,6 +409,8 @@ function ToolManager:deactivate(reason: string, pluginAlreadyInactive: boolean?)
 	self.escapeReason = nil
 	self._canAcceptWarned = false
 	self.overlay:hide()
+	-- Ends any capture or hover while the tool can still respond.
+	self.input:setSource(nil)
 
 	local ok, err = xpcall(instance.deactivate, debug.traceback, instance, ctx, reason)
 	if not ok then
@@ -410,6 +440,7 @@ function ToolManager:setSetting(id: string, key: string, value: any)
 	local stored = self.store:set(entry, key, value)
 	if stored ~= nil and self.activeTool == entry and self.activeContext then
 		self.activeContext:_notifySettingChanged(key, stored)
+		self.input:refresh()
 	end
 	-- Fire even when rejected so the UI re-renders the previous value.
 	self.changed:fire()

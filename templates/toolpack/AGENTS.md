@@ -28,7 +28,8 @@ The full contract is in `$STUDIO_TOOLS/docs/TOOLPACKS.md`. Read it before writin
 - A tool module returns a class made with `SDK.Tool:extend({ apiVersion = {{API_VERSION}}, id = ..., name = ..., ... })` and overrides `activate(ctx)`.
 - Require the SDK with `local SDK = require(script.Parent.Parent.SDK)` and annotate `ctx: SDK.ToolContext` so calls on `ctx` are type checked.
 - Every tool declares `apiVersion` explicitly.
-- Connect and create through `ctx` (`ctx:onMouseDown`, `ctx:createHighlight`, `ctx:connect`, ...) so everything is cleaned up on deactivate.
+- Take mouse input through input behaviors (`self:addInputBehavior(SDK.SingleClickInputBehavior:new({...}))`, `ClickDragInputBehavior`, `ClickOrDragInputBehavior`, `HoverInputBehavior`), not mouse events. Behavior callbacks must not yield; use `task.spawn` for slow work.
+- Connect and create through `ctx` (`ctx:createHighlight`, `ctx:connect`, ...) so everything is cleaned up on deactivate.
 - Put changes to the place inside `ctx:recordUndo` / `ctx:beginUndo`.
 - No side effects at module load: every module is required to validate the pack.
 - Only require things inside this pack, plus the SDK.

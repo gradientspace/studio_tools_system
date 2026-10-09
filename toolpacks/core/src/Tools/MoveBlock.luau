@@ -7,8 +7,9 @@
 	the camera for Y moves. The part is offset by how far that intersection
 	point has moved from where the drag (or the current mode) started.
 
-	Extends PartPickerTool: picking a part starts a drag, and hover updates
-	drive the drag while one is in progress.
+	Extends PartPickerTool, replacing its click with a ClickDragInputBehavior.
+	Shift going up or down is an input update, so the drag switches modes
+	without the mouse moving.
 ]]
 
 local SDK = require(script.Parent.Parent.SDK)
@@ -17,7 +18,7 @@ local PartPickerTool = require(script.Parent.Parent.Shared.PartPickerTool)
 local MoveBlock = PartPickerTool:extend({
 	apiVersion = 1,
 	id = "MoveBlock",
-	version = "1.0.0",
+	version = "1.1.0",
 	name = "Move",
 	description = "Drag a part to move it in XZ. Hold Shift while dragging to move it vertically. Locked parts are skipped.",
 	order = 40,
@@ -75,20 +76,38 @@ function MoveBlock:beginMode(grabPoint: Vector3, vertical: boolean)
 	drag.planeNormal = if vertical then verticalPlaneNormal() else Vector3.yAxis
 end
 
-function MoveBlock:updateDrag()
+function MoveBlock:beginDrag(point: SDK.InputPoint, vertical: boolean)
+	self:endDrag()
+	local part, hit = self:getTarget(point)
+	if not part or not hit then
+		return
+	end
+	self.drag = { part = part, undo = self.ctx:beginUndo("Move Part") }
+	self:beginMode(hit.Position, vertical)
+	self:setHighlight(part)
+end
+
+function MoveBlock:updateDrag(point: SDK.InputPoint, vertical: boolean)
 	local drag = self.drag
-	local vertical = self.ctx:isShiftDown()
+	if not drag then
+		return
+	end
+	if drag.part.Parent == nil then
+		-- Deleted out from under us (e.g. undo); abandon the drag.
+		self:endDrag()
+		return
+	end
 	if vertical ~= drag.vertical then
 		-- The grab point has moved along with the part since the mode began.
 		local moved = drag.part.Position - drag.anchorCFrame.Position
 		self:beginMode(drag.anchorPoint + moved, vertical)
 	end
 
-	local point = intersectRayPlane(self.ctx.mouse.UnitRay, drag.anchorPoint, drag.planeNormal)
-	if not point then
+	local hitPoint = intersectRayPlane(point.ray, drag.anchorPoint, drag.planeNormal)
+	if not hitPoint then
 		return
 	end
-	local delta = point - drag.anchorPoint
+	local delta = hitPoint - drag.anchorPoint
 	local snap = self.ctx.settings.snap
 	if drag.vertical then
 		delta = Vector3.new(0, snapValue(delta.Y, snap), 0)
@@ -105,45 +124,24 @@ function MoveBlock:endDrag()
 	end
 end
 
-function MoveBlock:onPick(part: BasePart)
-	self:endDrag()
-	local _, hit = self.ctx:partUnderMouse()
-	if not hit then
-		return
-	end
-	self.drag = { part = part, undo = self.ctx:beginUndo("Move Part") }
-	self:beginMode(hit.Position, self.ctx:isShiftDown())
-end
-
-function MoveBlock:updateHover()
-	local drag = self.drag
-	if drag and drag.part.Parent == nil then
-		-- Deleted out from under us (e.g. undo); abandon the drag.
-		self:endDrag()
-		drag = nil
-	end
-	if drag then
-		self:updateDrag()
-		self.highlight.Adornee = drag.part
-	else
-		PartPickerTool.updateHover(self)
-	end
-end
-
-function MoveBlock:activate(ctx: SDK.ToolContext)
-	PartPickerTool.activate(self, ctx)
-	ctx:onMouseUp(function()
-		self:endDrag()
-		self:updateHover()
-	end)
-	ctx:onKey(function(input)
-		if input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift then
-			self:updateHover()
-		end
-	end)
-	ctx:addCleanup(function()
-		self:endDrag()
-	end)
+function MoveBlock:createPickBehavior(): SDK.InputBehavior
+	-- With no onCancelDrag, a drag that's cut short (e.g. the tool is
+	-- shut down mid-drag) ends normally, keeping the move.
+	return SDK.ClickDragInputBehavior:new({
+		id = "Drag",
+		hitTest = function(point)
+			return self:hitTest(point)
+		end,
+		onBeginDrag = function(point, modifiers)
+			self:beginDrag(point, modifiers.shift)
+		end,
+		onUpdateDrag = function(point, modifiers)
+			self:updateDrag(point, modifiers.shift)
+		end,
+		onEndDrag = function()
+			self:endDrag()
+		end,
+	})
 end
 
 return MoveBlock

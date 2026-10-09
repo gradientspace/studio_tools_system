@@ -8,7 +8,7 @@ local Blocks = require(script.Parent.Parent.Shared.Blocks)
 local PlaceBlock = SDK.Tool:extend({
 	apiVersion = 1,
 	id = "PlaceBlock",
-	version = "1.0.0",
+	version = "1.1.0",
 	name = "Place Block",
 	description = "Click a surface to place a block against it. With snapping on, blocks sit on a grid matching their size.",
 	order = 10,
@@ -20,28 +20,37 @@ local PlaceBlock = SDK.Tool:extend({
 	},
 })
 
-function PlaceBlock:updatePreview()
-	local settings = self.ctx.settings
-	local hit = self.ctx:raycast()
+-- Where a block would go for an input point, and the hit's distance (its
+-- hit-test depth). nil if the ray hits nothing.
+function PlaceBlock:targetAt(point: SDK.InputPoint): (CFrame?, number?)
+	local hit = self.ctx:raycastAt(point)
 	if not hit then
-		self.targetCFrame = nil
+		return nil, nil
+	end
+	local size = self.ctx.settings.size
+	local position = hit.Position + hit.Normal * (size / 2)
+	if self.ctx.settings.snap then
+		position = Blocks.snapCenter(position, size)
+	end
+	return CFrame.new(position), hit.Distance
+end
+
+-- Shows the preview for an input point, or hides it (nil).
+function PlaceBlock:showPreview(point: SDK.InputPoint?)
+	local cframe = if point then self:targetAt(point) else nil
+	if not cframe then
 		self.preview.Visible = false
 		return
 	end
-	local position = hit.Position + hit.Normal * (settings.size / 2)
-	if settings.snap then
-		position = Blocks.snapCenter(position, settings.size)
-	end
-	self.targetCFrame = CFrame.new(position)
-	self.preview.CFrame = self.targetCFrame
+	local settings = self.ctx.settings
+	self.preview.CFrame = cframe
 	self.preview.Size = Vector3.one * settings.size
 	self.preview.Color3 = settings.color
 	self.preview.Visible = true
 end
 
-function PlaceBlock:place()
-	self:updatePreview()
-	local cframe = self.targetCFrame
+function PlaceBlock:place(point: SDK.InputPoint)
+	local cframe = self:targetAt(point)
 	if not cframe then
 		return
 	end
@@ -50,27 +59,35 @@ function PlaceBlock:place()
 		local part = Blocks.create(settings.size, cframe, settings.color, settings.material)
 		part.Parent = workspace
 	end)
-	self:updatePreview()
 end
 
 function PlaceBlock:activate(ctx: SDK.ToolContext)
 	self.preview = ctx:createBoxPreview()
-	self.targetCFrame = nil
 
-	ctx:onMouseMove(function()
-		self:updatePreview()
-	end)
-	ctx:onSettingChanged(function()
-		self:updatePreview()
-	end)
-	ctx:onUndoRedo(function()
-		self:updatePreview()
-	end)
-	ctx:onMouseDown(function()
-		self:place()
-	end)
-
-	self:updatePreview()
+	local function hitTest(point: SDK.InputPoint): number?
+		local _, depth = self:targetAt(point)
+		return depth
+	end
+	-- The preview follows the mouse (and stays put while the button is held).
+	self:addInputBehavior(SDK.HoverInputBehavior:new({
+		id = "Preview",
+		hitTest = hitTest,
+		onUpdateHover = function(point)
+			self:showPreview(point)
+		end,
+		onEndHover = function()
+			self:showPreview(nil)
+		end,
+	}))
+	-- Releasing over a surface places the block; the hover then moves the
+	-- preview on top of it.
+	self:addInputBehavior(SDK.SingleClickInputBehavior:new({
+		id = "Place",
+		hitTest = hitTest,
+		onClick = function(point)
+			self:place(point)
+		end,
+	}))
 end
 
 return PlaceBlock

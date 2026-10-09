@@ -56,7 +56,8 @@ If the log shows nothing new after a save, the server may not be running, or Stu
 ## Rules
 
 - **No side effects at module load.** Every module is required during validation. Do work in `activate` / `start`, not at the top level.
-- **Tools use `ctx` for cleanup and undo.** Connect and create through `ctx` (`ctx:connect`, `ctx:onMouseDown`, `ctx:createHighlight`, ...) so deactivation cleans up. Put changes to the place inside `ctx:recordUndo` / `ctx:beginUndo`.
+- **Tools use `ctx` for cleanup and undo.** Connect and create through `ctx` (`ctx:connect`, `ctx:createHighlight`, ...) so deactivation cleans up. Put changes to the place inside `ctx:recordUndo` / `ctx:beginUndo`.
+- **Tools take mouse input through input behaviors**, not mouse events: `self:addInputBehavior(SDK.SingleClickInputBehavior:new({...}))` etc. (see "Input" in `docs/TOOLPACKS.md`). The InputManager (`System/InputManager.luau`) is the only code that listens to the mouse for tools. Behavior callbacks must not yield.
 - **Pack code uses only the SDK.** Packs require `script.Parent.Parent.SDK` (their generated `SDK.luau`), never `StudioTools.System`.
 - **The SDK is a versioned contract** (see Versioning in `docs/TOOLPACKS.md`).
   - Adding to `ToolContext` or the SDK is fine. Update `SDK/Types.luau` to match, then run `npm run export-sdk`.

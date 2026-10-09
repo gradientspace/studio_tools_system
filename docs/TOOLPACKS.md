@@ -93,6 +93,9 @@ Commit `SDK.luau` in the pack's repo. `npm run check` warns when it's missing or
 | `SDK.API_VERSION`, `SDK.MIN_API_VERSION` | API versions this build of the framework supports |
 | `SDK.isApiVersionSupported(n)` | |
 | `SDK.Tool` | Base class for all tools |
+| `SDK.InputBehavior` | Base class for input behaviors (see Input) |
+| `SDK.SingleClickInputBehavior`, `SDK.ClickDragInputBehavior`, `SDK.ClickOrDragInputBehavior`, `SDK.HoverInputBehavior` | The standard input behaviors |
+| `SDK.CaptureState` | Values returned by input behavior methods |
 | `SDK.Maid`, `SDK.Signal` | Cleanup and event utilities |
 | `SDK.ToolContext`, `SDK.ToolDefinition`, `SDK.SettingSchema`, ... | Exported types (`SDK/Types.luau`) |
 
@@ -215,7 +218,87 @@ Call `ctx:refreshShutdownButtons()` after a state change to update the button im
 
 What each reason means is up to the tool. For Accept/Cancel, a convenient pattern is to open one undo recording in `activate` (`self.session = ctx:beginUndo("My Tool")`), then call `self.session.commit()` on Accept and `self.session.cancel()` on Cancel. Cancelling the recording reverts everything done during it. For `Force`, choose a sensible default; keeping the changes matches how Studio's own tools behave.
 
-Clicks on the overlay buttons are not passed to `ctx:onMouseDown`, so clicking Done never also acts on the scene behind it. (Raw `ctx.mouse.Button1Down` connections don't get this filtering.)
+Clicks on the overlay buttons never reach the tool's input behaviors, so clicking Done never also acts on the scene behind it.
+
+### Input
+
+Tools don't listen to the mouse. They add **input behaviors**, and the system's InputManager routes mouse input to them. It guarantees that:
+- only the active tool's behaviors get input;
+- only one behavior captures the mouse at a time;
+- a capture is ended if the tool shuts down, the behavior is removed, or Studio loses focus.
+
+Add behaviors in `activate()`:
+
+```lua
+function MyTool:activate(ctx: SDK.ToolContext)
+	self:addInputBehavior(SDK.ClickDragInputBehavior:new({
+		hitTest = function(point: SDK.InputPoint): number?
+			local part, hit = ctx:partAt(point)
+			return if part and hit then hit.Distance else nil   -- nil: not a target
+		end,
+		onBeginDrag = function(point, modifiers) ... end,
+		onUpdateDrag = function(point, modifiers) ... end,
+		onEndDrag = function(point, modifiers) ... end,
+	}))
+end
+```
+
+Callbacks get an `SDK.InputPoint`, `{ position: Vector2, ray: Ray }`: the viewport position and the world ray through it. `ctx:raycastAt(point)` and `ctx:partAt(point)` cast that ray. They also get `SDK.Modifiers`, `{ shift, ctrl, alt, cmd }` booleans. A tool can add several behaviors, and add or remove them while it runs (`self:addInputBehavior`, `self:removeInputBehavior`).
+
+#### Standard behaviors
+
+All of them take a `hitTest(point)` that returns the distance along `point.ray` to something the behavior should act on, or nil. Callbacks can be passed as options or assigned to the behavior later. `id` and `priority` are optional. `button` (`"Left"` by default, or `"Middle"`) picks the mouse button for clicks and drags.
+
+| Behavior | Callbacks | Behavior |
+| --- | --- | --- |
+| `SDK.SingleClickInputBehavior` | `onClick` | Press and release on a target. `hitTest` runs again on release, and the click only fires if it still hits, so moving off the target cancels. |
+| `SDK.ClickDragInputBehavior` | `onBeginDrag`, `onUpdateDrag`, `onEndDrag`, `onCancelDrag` | A press on a target starts the drag at the press point. Every input update while the button is held calls `onUpdateDrag`, including modifier keys going up or down, camera moves, and the release itself. The release then calls `onEndDrag`. If the drag is taken away, `onCancelDrag()` runs, or `onEndDrag` at the last point if there's no `onCancelDrag`. |
+| `SDK.ClickOrDragInputBehavior` | `onClick`, plus the drag callbacks | A click if the release is within `dragThreshold` pixels (default 4) of the press. Otherwise a drag that begins at the press point once the mouse moves further. |
+| `SDK.HoverInputBehavior` | `onBeginHover` (defaults to `onUpdateHover`), `onUpdateHover`, `onEndHover` | Hover only: active while `hitTest` hits and no other behavior has a better hover. |
+
+#### How input is routed
+
+The system turns every mouse event, modifier key change, camera move, undo/redo and setting edit into an `SDK.InputState`. It holds:
+- `point` and `previousPoint`;
+- a `ButtonState` (`pressed`, `down`, `released`) for each of `left`, `middle`, `shift`, `ctrl`, `alt` and `cmd`;
+- `time`.
+
+`pressed` and `released` are true only in the update where the change happened.
+
+- **Capture.** While nothing is capturing, every behavior is asked `wantsCapture(input)`. All of them are always asked, because any one might have the nearest hit.
+  - A behavior answers nil, or `{ depth = number }`.
+  - Requests are ordered by `priority` (lower first, default 100), then by depth (nearest first). `beginCapture` is tried on each in turn until one returns `"Begin"`; `"Ignore"` passes to the next.
+  - The capturing behavior then gets every update through `updateCapture` until it returns `"End"`, followed by `endCapture`.
+  - `forceEndCapture` replaces `endCapture` when the capture is taken away.
+- **Hover.** Behaviors with `enableHover = true` are asked `wantsHover(input)` on every update that isn't captured, and the best request hovers.
+  - The hovering behavior gets `beginHover`, then `updateHover` while it stays the best, then `endHover`.
+  - Hover is paused, not ended, while something captures, and resumes on the update that ends the capture.
+- While the mouse is over system UI in the viewport (the shutdown buttons, the chat box), or a dialog is open, nothing starts capturing and hover ends.
+- **Methods must not yield.** Use `task.spawn` for slow work. A method that yields, or errors, counts as failed: it doesn't capture or hover, or its capture is force-ended. It's reported once in the output.
+
+For something the standard behaviors don't cover, extend `SDK.InputBehavior` and override its methods:
+
+```lua
+local MyBehavior = SDK.InputBehavior:extend({ id = "MyBehavior", enableHover = true })
+
+function MyBehavior:wantsCapture(input: SDK.InputState): SDK.CaptureRequest?
+	if input.left.pressed and input.alt.down then
+		return { depth = 0 }
+	end
+	return nil
+end
+
+function MyBehavior:beginCapture(input: SDK.InputState): SDK.CaptureState
+	return "Begin"
+end
+-- updateCapture, endCapture, forceEndCapture, wantsHover, beginHover, ...
+
+local behavior = MyBehavior:new({ someOption = 1 })   -- fields copied onto the instance, then init()
+```
+
+A tool that keeps its own list of behaviors can override `getInputBehaviors()` and call `ctx:inputBehaviorsChanged()` when the result changes. `ctx:refreshInput()` re-runs input at the current mouse position after the tool changes something its hit tests depend on. Undo/redo, setting edits and camera moves already do this.
+
+Behaviors are the only way tools get mouse input; the context has no mouse events and no `PluginMouse`. For keyboard shortcuts, use `ctx:onKey` and `ctx:isKeyDown`.
 
 ### Inheritance
 
@@ -230,7 +313,7 @@ function PartPickerTool:onPick(part)
 end
 
 function PartPickerTool:activate(ctx)
-	...                                 -- shared behavior, calls self:onPick(...)
+	...                                 -- shared behavior: adds input behaviors that call self:onPick(...)
 end
 
 -- Tools/Erase.luau
@@ -267,8 +350,8 @@ Every schema has `key`, `type` and `default`, and optionally `label`.
 
 The `ctx` passed to tools. Its type is `SDK.ToolContext`; the README has the full table. Briefly:
 - **State:** `ctx.settings`, `ctx.state`, `ctx.toolId`.
-- **Mouse and keyboard:** `onMouseMove`/`Down`/`Up`, `isKeyDown`, `isShiftDown`, `onKey`.
-- **Picking:** `raycast`, `partUnderMouse`.
+- **Input:** `inputBehaviorsChanged`, `refreshInput` (see Input); keyboard: `isKeyDown`, `isShiftDown`, `onKey`.
+- **Picking:** `raycastAt`, `partAt`, at an input point.
 - **Previews:** `createBoxPreview`, `createHighlight`.
 - **Undo:** `recordUndo`, `beginUndo`, `onUndoRedo`.
 - **Cleanup:** `connect`, `addCleanup`.
