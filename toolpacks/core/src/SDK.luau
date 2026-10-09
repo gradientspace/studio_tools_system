@@ -50,7 +50,8 @@ export type InputState = {
 	point: InputPoint,
 	previousPoint: InputPoint, -- point of the previous update (the same for key-only updates)
 	left: ButtonState,
-	middle: ButtonState, -- note that Studio also pans the camera with the middle button
+	middle: ButtonState, -- currently always up: middle-button input is disabled (Studio pans the camera with it)
+	right: ButtonState, -- currently always up: right-button input is disabled (Studio rotates the camera with it)
 	shift: ButtonState,
 	ctrl: ButtonState,
 	alt: ButtonState,
@@ -66,7 +67,7 @@ export type Modifiers = {
 	cmd: boolean,
 }
 
-export type MouseButton = "Left" | "Middle"
+export type MouseButton = "Left" | "Middle" | "Right"
 
 -- Returned by an InputBehavior's capture and hover methods:
 --   Begin     start capturing / hovering (from beginCapture / beginHover)

@@ -110,9 +110,14 @@ function InputBehavior.getModifiers(input: any): any
 	}
 end
 
--- The state of a mouse button ("Left" or "Middle") in `input`.
+-- The state of a mouse button ("Left", "Middle" or "Right") in `input`.
 function InputBehavior.getButton(input: any, button: string): any
-	return if button == "Middle" then input.middle else input.left
+	if button == "Middle" then
+		return input.middle
+	elseif button == "Right" then
+		return input.right
+	end
+	return input.left
 end
 
 -- A capture request for the standard behaviors: asks to capture when

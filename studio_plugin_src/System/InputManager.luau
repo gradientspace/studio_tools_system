@@ -27,6 +27,13 @@ local Maid = SDK.Maid
 
 local DEFAULT_PRIORITY = 100
 
+-- Middle- and right-button input is disabled: Studio pans (middle) and
+-- rotates (right) the camera on those drags and plugins can't stop it, so
+-- the drags don't work. While false, that button always reads as up and
+-- behaviors on it never start.
+local MIDDLE_BUTTON_ENABLED = false
+local RIGHT_BUTTON_ENABLED = false
+
 local MODIFIER_KEYS = {
 	shift = { Enum.KeyCode.LeftShift, Enum.KeyCode.RightShift },
 	ctrl = { Enum.KeyCode.LeftControl, Enum.KeyCode.RightControl },
@@ -79,6 +86,7 @@ function InputManager.new(plugin: Plugin, options: any?)
 	self._hover = nil -- behavior hovering
 	self._leftDown = false
 	self._middleDown = false
+	self._rightDown = false
 	self._keysDown = {} -- KeyCode -> true, modifier keys only
 	self._last = nil -- the previous InputState
 	self._queue = {}
@@ -148,8 +156,13 @@ end
 
 function InputManager:_onInput(input: InputObject, isDown: boolean)
 	if input.UserInputType == Enum.UserInputType.MouseButton3 then
-		if self._middleDown ~= isDown then
+		if MIDDLE_BUTTON_ENABLED and self._middleDown ~= isDown then
 			self._middleDown = isDown
+			self:_push()
+		end
+	elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
+		if RIGHT_BUTTON_ENABLED and self._rightDown ~= isDown then
+			self._rightDown = isDown
 			self:_push()
 		end
 	elseif input.UserInputType == Enum.UserInputType.Keyboard and IS_MODIFIER[input.KeyCode] then
@@ -180,6 +193,7 @@ function InputManager:_snapshot(): SDK.InputState
 		previousPoint = if last then last.point else point,
 		left = button("left", self._leftDown),
 		middle = button("middle", self._middleDown),
+		right = button("right", self._rightDown),
 		shift = button("shift", self:_isModifierDown("shift")),
 		ctrl = button("ctrl", self:_isModifierDown("ctrl")),
 		alt = button("alt", self:_isModifierDown("alt")),
@@ -371,7 +385,7 @@ end
 -- Force-ends the capture, ends the hover and forgets which buttons are down.
 function InputManager:_endAll()
 	table.clear(self._queue)
-	self._leftDown, self._middleDown = false, false
+	self._leftDown, self._middleDown, self._rightDown = false, false, false
 	table.clear(self._keysDown)
 	local captured, hovered = self._capture, self._hover
 	self._capture, self._hover = nil, nil

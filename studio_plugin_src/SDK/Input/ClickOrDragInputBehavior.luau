@@ -10,7 +10,7 @@
 			onEndDrag = function(point, modifiers) ... end,
 			onCancelDrag = function() ... end,                  -- optional
 			dragThreshold = 4,                                  -- optional, pixels
-			button = "Left",                                    -- optional; or "Middle"
+			button = "Left",                                    -- optional; or "Middle" / "Right"
 		})
 
 	Releasing within dragThreshold pixels of the press is a click, and as

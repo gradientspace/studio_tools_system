@@ -4,7 +4,7 @@
 		SDK.SingleClickInputBehavior:new({
 			hitTest = function(point) return depth or nil end,
 			onClick = function(point, modifiers) ... end,
-			button = "Left",   -- optional; or "Middle"
+			button = "Left",   -- optional; or "Middle" / "Right"
 		})
 
 	hitTest decides whether a press is on a target (and how near it is).

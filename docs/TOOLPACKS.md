@@ -247,7 +247,7 @@ Callbacks get an `SDK.InputPoint`, `{ position: Vector2, ray: Ray }`: the viewpo
 
 #### Standard behaviors
 
-All of them take a `hitTest(point)` that returns the distance along `point.ray` to something the behavior should act on, or nil. Callbacks can be passed as options or assigned to the behavior later. `id` and `priority` are optional. `button` (`"Left"` by default, or `"Middle"`) picks the mouse button for clicks and drags.
+All of them take a `hitTest(point)` that returns the distance along `point.ray` to something the behavior should act on, or nil. Callbacks can be passed as options or assigned to the behavior later. `id` and `priority` are optional. `button` (`"Left"` by default, `"Middle"` or `"Right"`) picks the mouse button for clicks and drags. Middle- and right-button input is currently disabled in the InputManager, because Studio pans and rotates the camera on those drags, so `"Middle"` and `"Right"` behaviors never start.
 
 | Behavior | Callbacks | Behavior |
 | --- | --- | --- |
@@ -260,7 +260,7 @@ All of them take a `hitTest(point)` that returns the distance along `point.ray` 
 
 The system turns every mouse event, modifier key change, camera move, undo/redo and setting edit into an `SDK.InputState`. It holds:
 - `point` and `previousPoint`;
-- a `ButtonState` (`pressed`, `down`, `released`) for each of `left`, `middle`, `shift`, `ctrl`, `alt` and `cmd`;
+- a `ButtonState` (`pressed`, `down`, `released`) for each of `left`, `middle`, `right`, `shift`, `ctrl`, `alt` and `cmd`;
 - `time`.
 
 `pressed` and `released` are true only in the update where the change happened.

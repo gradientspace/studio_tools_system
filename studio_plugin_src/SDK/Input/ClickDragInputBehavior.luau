@@ -7,7 +7,7 @@
 			onUpdateDrag = function(point, modifiers) ... end,  -- every update while held
 			onEndDrag = function(point, modifiers) ... end,     -- at the release
 			onCancelDrag = function() ... end,                  -- optional
-			button = "Left",                                    -- optional; or "Middle"
+			button = "Left",                                    -- optional; or "Middle" / "Right"
 		})
 
 	onUpdateDrag runs on every input update while the button is held: mouse
