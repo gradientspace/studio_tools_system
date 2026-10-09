@@ -50,6 +50,11 @@ function ToolContext.new(host: any, entry: any, settings: { [string]: any }, opt
 	self._refreshShutdownButtons = options.refreshShutdownButtons
 	self._inputBehaviorsChanged = options.inputBehaviorsChanged
 	self._refreshInput = options.refreshInput
+	self._setStatus = options.setStatus
+	self._setSettingState = options.setSettingState
+	self._panels = {} :: { Frame } -- from createViewportPanel
+	self._panelGui = nil :: ScreenGui?
+	self._panelColumns = {} :: { [string]: Frame } -- position -> container
 	return self
 end
 
@@ -248,6 +253,133 @@ function ToolContext:refreshShutdownButtons()
 	if self._refreshShutdownButtons then
 		self._refreshShutdownButtons()
 	end
+end
+
+-- Tool UI ----------------------------------------------------------------
+-- Tools put their controls in the palette's settings panel: values as
+-- settings, actions as "button" settings (Tool:onAction), progress as a
+-- status line, with setSettingState to show/hide or enable/disable widgets.
+-- A viewport panel is for anything that doesn't fit there.
+
+-- A line of text under the tool's name in the palette; nil hides it.
+function ToolContext:setStatus(text: string?)
+	if text ~= nil and type(text) ~= "string" then
+		error("ctx:setStatus: text must be a string or nil", 2)
+	end
+	if self._setStatus then
+		self._setStatus(text)
+	end
+end
+
+-- Shows/hides, enables/disables, relabels or changes the tooltip of one
+-- setting's widget, for any setting type. Only the fields given change.
+-- Every widget starts visible, enabled, and with its schema's label and
+-- tooltip, each time the tool activates.
+function ToolContext:setSettingState(key: string, state: SDK.SettingState)
+	if type(state) ~= "table" then
+		error("ctx:setSettingState: state must be a table", 2)
+	end
+	if self._setSettingState then
+		self._setSettingState(key, state)
+	end
+end
+
+local PANEL_MARGIN = 12
+
+local PANEL_POSITIONS = {
+	Top = { anchor = Vector2.new(0.5, 0), position = UDim2.new(0.5, 0, 0, PANEL_MARGIN), align = Enum.HorizontalAlignment.Center },
+	TopLeft = { anchor = Vector2.new(0, 0), position = UDim2.new(0, PANEL_MARGIN, 0, PANEL_MARGIN), align = Enum.HorizontalAlignment.Left },
+	TopRight = { anchor = Vector2.new(1, 0), position = UDim2.new(1, -PANEL_MARGIN, 0, PANEL_MARGIN), align = Enum.HorizontalAlignment.Right },
+}
+
+-- A panel in the viewport, styled like the system's viewport UI (see
+-- SDK.ViewportStyle): a Frame that sizes to its contents, with rounded
+-- corners, padding and a horizontal UIListLayout named "Layout". The tool
+-- fills it and may restyle it. Clicks inside it don't reach the tool's input
+-- behaviors. It's removed when the tool deactivates.
+function ToolContext:createViewportPanel(options: SDK.ViewportPanelOptions?): Frame
+	local positionName = options and options.position or "Top"
+	local placement = PANEL_POSITIONS[positionName]
+	if not placement then
+		error(string.format("ctx:createViewportPanel: unknown position '%s'", tostring(positionName)), 2)
+	end
+	local style = SDK.ViewportStyle
+
+	local gui = self._panelGui
+	if not gui then
+		gui = Instance.new("ScreenGui")
+		gui.Name = "StudioToolsToolPanels"
+		gui.IgnoreGuiInset = true
+		gui.ResetOnSpawn = false
+		gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		gui.DisplayOrder = 99 -- under the shutdown overlay and the chat
+		gui.Parent = CoreGui
+		self._panelGui = self:addCleanup(gui)
+	end
+
+	-- Panels at the same position stack downward in a column.
+	local column = self._panelColumns[positionName]
+	if not column then
+		column = Instance.new("Frame")
+		column.Name = positionName
+		column.AnchorPoint = placement.anchor
+		column.Position = placement.position
+		column.Size = UDim2.new()
+		column.AutomaticSize = Enum.AutomaticSize.XY
+		column.BackgroundTransparency = 1
+		local layout = Instance.new("UIListLayout")
+		layout.SortOrder = Enum.SortOrder.LayoutOrder
+		layout.HorizontalAlignment = placement.align
+		layout.Padding = UDim.new(0, 8)
+		layout.Parent = column
+		column.Parent = gui
+		self._panelColumns[positionName] = column
+	end
+
+	local panel = Instance.new("Frame")
+	panel.Name = options and options.name or "Panel"
+	panel.LayoutOrder = #self._panels + 1
+	panel.Size = UDim2.new()
+	panel.AutomaticSize = Enum.AutomaticSize.XY
+	panel.BackgroundColor3 = style.panel
+	panel.BorderSizePixel = 0
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, style.cornerRadius)
+	corner.Parent = panel
+	local padding = Instance.new("UIPadding")
+	padding.PaddingLeft = UDim.new(0, style.padding)
+	padding.PaddingRight = UDim.new(0, style.padding)
+	padding.PaddingTop = UDim.new(0, style.padding)
+	padding.PaddingBottom = UDim.new(0, style.padding)
+	padding.Parent = panel
+	local layout = Instance.new("UIListLayout")
+	layout.Name = "Layout"
+	layout.FillDirection = Enum.FillDirection.Horizontal
+	layout.VerticalAlignment = Enum.VerticalAlignment.Center
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, style.padding)
+	layout.Parent = panel
+	panel.Parent = column
+	table.insert(self._panels, panel)
+	return panel
+end
+
+-- True while the mouse is over one of the tool's viewport panels (the
+-- ToolManager blocks tool input then).
+function ToolContext:_isMouseOverPanel(): boolean
+	if not self._panelGui or not self._panelGui.Enabled then
+		return false
+	end
+	local mouse = self.plugin:GetMouse()
+	for _, panel in self._panels do
+		if panel.Parent and panel.Visible then
+			local position, size = panel.AbsolutePosition, panel.AbsoluteSize
+			if mouse.X >= position.X and mouse.X <= position.X + size.X and mouse.Y >= position.Y and mouse.Y <= position.Y + size.Y then
+				return true
+			end
+		end
+	end
+	return false
 end
 
 -- Tools Agent -------------------------------------------------------------

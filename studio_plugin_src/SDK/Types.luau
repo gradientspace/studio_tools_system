@@ -5,18 +5,46 @@
 	so it must stay self-contained (no requires).
 ]]
 
+-- How the palette shows a setting. Only affects presentation, never the
+-- value. Options that don't apply to a setting's type are ignored.
+export type SettingExtendedOptions = {
+	-- number / integer: "field" (a text field, the default) or "slider" (a
+	-- slider with the value beside it; needs min and max, else it falls back
+	-- to a field).
+	widget: ("field" | "slider")?,
+	-- string: grey hint text shown while the field is empty.
+	placeholder: string?,
+}
+
+-- One entry in a tool's `settings`. The palette builds the widgets from these;
+-- tools never create settings UI themselves.
+--   number / integer   a number (integer: whole numbers only), as a text field or slider
+--   string             a line of text
+--   boolean            On/Off
+--   color              a swatch that opens a color picker
+--   enum               a dropdown of `options`
+--   button             an action, not a value: a full-width button labeled
+--                      `label` that calls the tool's onAction(key)
+--   label              display-only text (its `label`), not a value; change
+--                      it with ctx:setSettingState(key, { label = ... })
 export type SettingSchema = {
 	key: string,
 	label: string?,
-	type: "number" | "boolean" | "color" | "enum",
-	default: any,
-	-- number
+	type: "number" | "integer" | "string" | "boolean" | "color" | "enum" | "button" | "label",
+	default: any, -- not used by "button" or "label"
+	-- Shown when the mouse rests on the setting's row (any type).
+	tooltip: string?,
+	-- Presentation options (see SettingExtendedOptions).
+	extended: SettingExtendedOptions?,
+	-- number / integer (an integer's step is a whole number, default 1)
 	min: number?,
 	max: number?,
 	step: number?,
+	-- string
+	maxLength: number?,
 	-- enum
 	options: { string }?,
-	-- color
+	-- color: swatches offered in the picker
 	presets: { Color3 }?,
 }
 
@@ -192,6 +220,47 @@ export type UndoRecording = {
 	cancel: () -> (),
 }
 
+-- Tool UI --------------------------------------------------------------------
+
+-- Passed to ctx:setSettingState to change how one setting's widget is shown
+-- while the tool is active. Only the fields given change; the others keep
+-- their current values. Every widget starts visible, enabled, and with its
+-- schema's label and tooltip.
+export type SettingState = {
+	visible: boolean?, -- false hides the widget's row
+	enabled: boolean?, -- false greys it out; it can't be edited (or clicked, for a button)
+	label: string?, -- replaces the label (a button's text)
+	tooltip: string?, -- replaces the tooltip ("" removes it)
+}
+
+-- Where ctx:createViewportPanel puts a panel. Panels at the same position
+-- stack downward.
+export type ViewportPanelPosition = "Top" | "TopLeft" | "TopRight"
+
+export type ViewportPanelOptions = {
+	position: ViewportPanelPosition?, -- default "Top" (top center of the viewport)
+	name: string?, -- the Frame's Name
+}
+
+-- SDK.ViewportStyle: the look of the system's viewport UI (the Tools Agent
+-- chat, the shutdown overlay), for tools styling the contents of their
+-- viewport panels to match.
+export type ViewportStyle = {
+	panel: Color3, -- panel background
+	field: Color3, -- inset areas, text fields
+	button: Color3, -- ordinary buttons
+	accent: Color3, -- primary buttons
+	text: Color3,
+	dimText: Color3,
+	errorText: Color3,
+	font: Enum.Font,
+	boldFont: Enum.Font,
+	textSize: number,
+	cornerRadius: number, -- panels; use about half for buttons
+	padding: number,
+	rowHeight: number, -- buttons and single-line fields
+}
+
 -- Tools Agent requests (ctx:askAgent) --------------------------------------
 
 -- "sending": not accepted by the server yet; "queued": waiting for the agent
@@ -276,6 +345,18 @@ export type ToolContext = {
 	-- Roblox Studio MCP. Returns right away (never yields).
 	askAgent: (self: ToolContext, prompt: string, options: AskAgentOptions?) -> AgentRequest,
 
+	-- A line of text under the tool's name in the palette (nil hides it).
+	setStatus: (self: ToolContext, text: string?) -> (),
+	-- Shows/hides, enables/disables or relabels one setting's widget (any
+	-- type, including buttons).
+	setSettingState: (self: ToolContext, key: string, state: SettingState) -> (),
+	-- A panel in the viewport for UI that doesn't fit the settings panel.
+	-- Prefer settings, "button" settings and setStatus. Returns a Frame styled like the
+	-- system's viewport UI, with a horizontal UIListLayout named "Layout";
+	-- fill it with your own GUI objects and restyle it freely. Clicks inside
+	-- it don't reach the tool's input behaviors. Removed on deactivate.
+	createViewportPanel: (self: ToolContext, options: ViewportPanelOptions?) -> Frame,
+
 	log: (self: ToolContext, ...any) -> (),
 }
 
@@ -322,6 +403,12 @@ export type ToolDefinition = {
 	version: string?,
 	-- Palette sort order within the pack.
 	order: number?,
+	-- Palette tab to show the tool in (at most 24 characters). Default: the
+	-- pack's `tab`.
+	tab: string?,
+	-- Section within the tab; tools with the same section are grouped, and
+	-- sections are labeled when a tab has more than one. Default: the pack's name.
+	section: string?,
 	-- Base classes under Tools/ set this so they aren't listed. Not inherited.
 	abstract: boolean?,
 	settings: { SettingSchema }?,
@@ -341,6 +428,9 @@ export type ToolDefinition = {
 	-- The behaviors that receive the tool's mouse input. The default returns
 	-- those added with addInputBehavior().
 	getInputBehaviors: (self: any) -> { InputBehavior },
+	-- Called when the user clicks one of the tool's "button" settings, with
+	-- its key. Runs in its own thread, so it may yield.
+	onAction: (self: any, key: string) -> (),
 }
 
 export type Connection = {
@@ -372,6 +462,7 @@ export type ToolClass = {
 	getInputBehaviors: (self: any) -> { InputBehavior },
 	addInputBehavior: <T>(self: any, behavior: T) -> T,
 	removeInputBehavior: (self: any, behavior: InputBehavior) -> (),
+	onAction: (self: any, key: string) -> (),
 }
 
 -- The SDK module itself.
@@ -391,6 +482,7 @@ export type SDK = {
 	HoverInputBehavior: { new: (self: any, options: HoverOptions) -> HoverInputBehavior },
 	Maid: { new: () -> Maid },
 	Signal: { new: () -> Signal },
+	ViewportStyle: ViewportStyle,
 }
 
 -- Pack metadata from toolpack.json, as delivered by the server.

@@ -8,11 +8,14 @@
 	class created with SDK.Tool:extend (see SDK/Tool.luau and
 	docs/TOOLPACKS.md). Classes with `abstract = true` are skipped.
 
-	Packs are grouped into palette tabs by their manifest's `tab` (default
-	"Core"). Tabs are created in order of the first pack that names them, so
-	several packs can share a tab. Packs the loader couldn't load
-	(host.build.failedPacks) are recorded in their tab so the palette can
-	show them, and otherwise skipped.
+	Tools are grouped into palette tabs, and within a tab into sections. A
+	tool's tab is its definition's `tab`, else its pack manifest's `tab`
+	(default "Core"); its section is its definition's `section`, else its
+	pack's name. Tabs and sections are created in order of first appearance
+	(packs in config order, tools in sort order), so several packs can share
+	a tab. Packs the loader couldn't load (host.build.failedPacks) are
+	recorded in their manifest's tab so the palette can show them, and
+	otherwise skipped.
 
 	Tools are tracked as entries:
 	  { id = "<packId>/<toolId>", pack = PackManifest, definition = class }
@@ -33,6 +36,12 @@
 	activate(), forwards ctx:inputBehaviorsChanged() / ctx:refreshInput(),
 	refreshes input after setting changes, and detaches the tool (ending
 	any capture) before its deactivate() runs.
+
+	The active tool's UI state lives here too: its status line
+	(ctx:setStatus) and per-setting widget state (ctx:setSettingState), both
+	reset on activation. Changes fire toolUiChanged, so the palette can
+	update those widgets in place instead of re-rendering. Clicking a
+	"button" setting calls runAction(key), which calls the tool's onAction.
 ]]
 
 local UserInputService = game:GetService("UserInputService")
@@ -54,6 +63,7 @@ local Trigger = SDK.ShutdownTrigger
 
 local ACCEPT_POLL_INTERVAL = 0.1
 local DEFAULT_TAB = "Core"
+local MAX_TAB_LENGTH = 24
 
 -- Turns a tool's shutdown options into overlay buttons, filling in defaults.
 -- Also returns the reason the Escape key maps to.
@@ -116,6 +126,12 @@ local function validateDefinition(definition: any): (boolean, string?)
 	if definition.settings ~= nil and type(definition.settings) ~= "table" then
 		return false, "'settings' must be an array"
 	end
+	if definition.tab ~= nil and (type(definition.tab) ~= "string" or definition.tab == "" or #definition.tab > MAX_TAB_LENGTH) then
+		return false, string.format("'tab' must be a non-empty string of at most %d characters", MAX_TAB_LENGTH)
+	end
+	if definition.section ~= nil and (type(definition.section) ~= "string" or definition.section == "") then
+		return false, "'section' must be a non-empty string"
+	end
 	return true, nil
 end
 
@@ -135,7 +151,7 @@ function ToolManager.new(host: any, packsFolder: Instance?, options: any?)
 	local self = setmetatable({}, ToolManager)
 	self.host = host
 	self.plugin = host.plugin :: Plugin
-	-- { { name, packs = { { manifest, tools = { entry } } }, failedPacks = { PackManifest } } },
+	-- { { name, sections = { { name, tools = { entry } } }, failedPacks = { PackManifest } } },
 	-- in order of first appearance
 	self.tabs = {}
 	self.tools = {} -- every entry, flattened
@@ -146,9 +162,16 @@ function ToolManager.new(host: any, packsFolder: Instance?, options: any?)
 	self.escapeReason = nil -- what Escape does for the active tool
 	self._shutdownPending = false -- a confirmShutdown() call is in progress
 	self.changed = Signal.new()
+	-- The active tool's UI state: { status = string?, settings = { [key]: { visible, enabled, label?, tooltip? } } }
+	self.toolUi = { status = nil, settings = {} }
+	self.toolUiChanged = Signal.new()
+	-- (toolId, key, value) after a setting edit; the palette updates that widget in place.
+	self.settingChanged = Signal.new()
 	self.store = SettingsStore.new(host.plugin)
 	self._maid = Maid.new()
 	self._maid:add(self.changed)
+	self._maid:add(self.toolUiChanged)
+	self._maid:add(self.settingChanged)
 	self.overlay = self._maid:add(ViewportOverlay.new())
 	self._extraInputBlocked = options and options.isInputBlocked
 	self.input = self._maid:add(InputManager.new(self.plugin, {
@@ -184,7 +207,9 @@ end
 -- True while viewport clicks shouldn't reach the tool: the mouse is over
 -- system UI (shutdown buttons, chat box) or a dialog is open.
 function ToolManager:_isInputBlocked(): boolean
-	return self.overlay:isBlockingInput() or (self._extraInputBlocked ~= nil and self._extraInputBlocked())
+	return self.overlay:isBlockingInput()
+		or (self._extraInputBlocked ~= nil and self._extraInputBlocked())
+		or (self.activeContext ~= nil and self.activeContext:_isMouseOverPanel())
 end
 
 -- Returns the tab with this name, creating it (at the end) if needed.
@@ -194,9 +219,21 @@ function ToolManager:_getTab(name: string)
 			return tab
 		end
 	end
-	local tab = { name = name, packs = {}, failedPacks = {} }
+	local tab = { name = name, sections = {}, failedPacks = {} }
 	table.insert(self.tabs, tab)
 	return tab
+end
+
+-- Returns the section with this name in a tab, creating it (at the end) if needed.
+local function getSection(tab: any, name: string)
+	for _, section in tab.sections do
+		if section.name == name then
+			return section
+		end
+	end
+	local section = { name = name, tools = {} }
+	table.insert(tab.sections, section)
+	return section
 end
 
 function ToolManager:_loadPacks(packsFolder: Instance?, manifests: { any }, failedPacks: { [string]: string })
@@ -229,7 +266,7 @@ function ToolManager:_loadPacks(packsFolder: Instance?, manifests: { any }, fail
 			continue
 		end
 
-		local pack = { manifest = manifest, tools = {} }
+		local tools = {}
 		for _, module in toolsFolder:GetChildren() do
 			if not module:IsA("ModuleScript") then
 				continue
@@ -254,13 +291,15 @@ function ToolManager:_loadPacks(packsFolder: Instance?, manifests: { any }, fail
 			end
 			local entry = { id = id, pack = manifest, definition = definition }
 			self.toolsById[id] = entry
-			table.insert(pack.tools, entry)
+			table.insert(tools, entry)
 		end
 
-		sortTools(pack.tools)
-		if #pack.tools > 0 then
-			table.insert(self:_getTab(tabName).packs, pack)
-			table.move(pack.tools, 1, #pack.tools, #self.tools + 1, self.tools)
+		sortTools(tools)
+		local defaultSection = if type(manifest.name) == "string" and manifest.name ~= "" then manifest.name else manifest.id
+		for _, entry in tools do
+			local tab = self:_getTab(entry.definition.tab or tabName)
+			table.insert(getSection(tab, entry.definition.section or defaultSection).tools, entry)
+			table.insert(self.tools, entry)
 		end
 	end
 end
@@ -300,7 +339,19 @@ function ToolManager:activate(id: string)
 				self.input:refresh()
 			end
 		end,
+		setStatus = function(text)
+			if self.activeContext == ctx and self.toolUi.status ~= text then
+				self.toolUi.status = text
+				self.toolUiChanged:fire()
+			end
+		end,
+		setSettingState = function(key, state)
+			if self.activeContext == ctx then
+				self:_setSettingState(entry, key, state)
+			end
+		end,
 	})
+	self.toolUi = { status = nil, settings = {} }
 	local instance = setmetatable({ ctx = ctx }, entry.definition)
 	self.activeTool = entry
 	self.activeContext = ctx
@@ -424,6 +475,55 @@ function ToolManager:deactivate(reason: string, pluginAlreadyInactive: boolean?)
 	self.changed:fire()
 end
 
+-- Widget state for one of the active tool's settings (defaults if unset).
+function ToolManager:getSettingState(key: string): { visible: boolean, enabled: boolean, label: string?, tooltip: string? }
+	return self.toolUi.settings[key] or { visible = true, enabled = true, label = nil, tooltip = nil }
+end
+
+function ToolManager:_setSettingState(entry: any, key: string, state: any)
+	if not self.store:getSchema(entry, key) then
+		warn(string.format("[StudioTools] Tool '%s': setSettingState: no setting '%s'", entry.id, tostring(key)))
+		return
+	end
+	local current = table.clone(self:getSettingState(key))
+	if state.visible ~= nil then
+		current.visible = state.visible == true
+	end
+	if state.enabled ~= nil then
+		current.enabled = state.enabled == true
+	end
+	if state.label ~= nil then
+		current.label = tostring(state.label)
+	end
+	if state.tooltip ~= nil then
+		current.tooltip = tostring(state.tooltip)
+	end
+	self.toolUi.settings[key] = current
+	self.toolUiChanged:fire()
+end
+
+-- Called when a "button" setting of the active tool is clicked: runs the
+-- tool's onAction(key) in its own thread, unless the button is disabled.
+function ToolManager:runAction(key: string)
+	local entry, instance = self.activeTool, self.activeInstance
+	if not entry or not instance then
+		return
+	end
+	local schema = self.store:getSchema(entry, key)
+	if not schema or schema.type ~= "button" or not self:getSettingState(key).enabled then
+		return
+	end
+	task.spawn(function()
+		local ok, err = xpcall(instance.onAction, debug.traceback, instance, key)
+		if not ok then
+			warn(string.format("[StudioTools] Tool '%s' onAction('%s') failed:\n%s", entry.id, key, tostring(err)))
+		end
+		if self.activeInstance == instance then
+			self.input:refresh()
+		end
+	end)
+end
+
 function ToolManager:toggle(id: string)
 	if self.activeTool and self.activeTool.id == id then
 		self:deactivate(Reason.Force)
@@ -442,8 +542,8 @@ function ToolManager:setSetting(id: string, key: string, value: any)
 		self.activeContext:_notifySettingChanged(key, stored)
 		self.input:refresh()
 	end
-	-- Fire even when rejected so the UI re-renders the previous value.
-	self.changed:fire()
+	-- Fire even when rejected, so the UI shows the value that's actually stored.
+	self.settingChanged:fire(id, key, self.store:get(entry)[key])
 end
 
 function ToolManager:destroy()

@@ -6,7 +6,7 @@ The only thing installed in Studio is a small **loader plugin**. The framework i
 
 Shared Luau **libraries** (e.g. [geometry3luau](https://github.com/gradientspace/geometry3luau)) are installed inside the loader plugin from their published GitHub releases, so they load once per Studio session and any tool can `require` them.
 
-Tools come in **tool packs**: folders or separate git repos with a small manifest. The palette shows a tab per tab name the packs declare (default "Core"); several packs can share a tab. Packs are listed in `toolpacks.json`, and the server syncs and serves them. See [docs/TOOLPACKS.md](docs/TOOLPACKS.md) for the pack contract.
+Tools come in **tool packs**: folders or separate git repos with a small manifest. The palette shows a tab per tab name the packs declare (default "Core"); several packs can share a tab, and a tool can pick its own `tab` and `section` within it. Packs are listed in `toolpacks.json`, and the server syncs and serves them. See [docs/TOOLPACKS.md](docs/TOOLPACKS.md) for the pack contract.
 
 ```
 studio_plugin/StudioToolsLoader.lua   Loader plugin installed in Studio (toolbar, dock widget, HTTP, hot reload)
@@ -45,7 +45,7 @@ npm run new-pack -- <dir> # scaffold a new tool pack (with agent instructions) a
 
 Studio output about the tool system (loads, failures, runtime errors) is forwarded to the server and written to `logs/studio-tools.log`, so it can be followed without looking at Studio. See "Checking and debugging" in [docs/TOOLPACKS.md](docs/TOOLPACKS.md).
 
-Restart Studio, then click **GS-STS** (in the Studio Tools group of the Plugins tab) to open the palette. The first time the plugin contacts the server, Studio asks for permission to make HTTP requests to `localhost`; allow it.
+Restart Studio, then click **GSToolAgent** (in the GSToolAgent group of the Plugins tab) to open the palette. The first time the plugin contacts the server, Studio asks for permission to make HTTP requests to `localhost`; allow it.
 
 The server URL can be changed with the `StudioToolsSystem.ServerUrl` plugin setting. The server port can be changed with `PORT=... npm start`.
 
@@ -84,10 +84,10 @@ State that should survive a hot reload can be kept in `host.persist` (a plain ta
 
 The **Tools Agent** button at the bottom-left of the viewport opens a chat box connected to a headless coding agent that the dev server runs in this repo. The agent is [Claude Code](https://claude.com/claude-code) by default, or Codex; Studio doesn't know or care which. Type a request ("make Place Block's default size 8") and press Enter.
 - **What the agent does:** it edits tools and runs `npm run check`. The server then hot-reloads the change into Studio.
-- **Where new tools go:** in your own pack, `user_toolpacks/user/` (tab "User"), which is gitignored, so they stay out of the system's repo. The agent creates the pack when it's first needed. It changes the framework or the built-in packs only when you ask for that explicitly.
+- **Where new tools go:** in your own pack, `user_toolpacks/user/`, which is gitignored, so they stay out of the system's repo. The agent creates the pack when it's first needed. It puts each new tool in an existing tab where one fits, or else in a tab named for the kind of work (Material, Model, Texture, ...), unless you say where it should go. It changes the framework or the built-in packs only when you ask for that explicitly.
 - **System prompt:** `server/agent-instructions.md` holds the chat-specific instructions, on top of `AGENTS.md`. Claude Code gets them with `--append-system-prompt` on every message. Codex gets them as `developer_instructions` when a session starts, so after editing the file, use **New chat** for Codex to see the change.
 - **Default view:** just the entry field and a one-line preview of the latest reply or current activity. **History** expands the full conversation, with a **New chat** button.
-- **Stopping:** while the agent is working, **Send** becomes **Stop**.
+- **Stopping:** while the agent is working, **Send** becomes **Stop**, and a pulsing orange **Working...** label shows next to the Tools Agent button (**Tool called Agent...** when the agent is handling a tool's request).
 - **Requests from tools:** tools can send the agent prompts with `ctx:askAgent`, e.g. to edit the place through the Roblox Studio MCP when you click something. They appear in the chat labeled with the tool's name, queue behind whatever the agent is doing, and the agent's final reply goes back to the tool. **Stop** also cancels queued requests.
 - **Context:** each message resumes the same agent session, so context carries over between requests. The conversation is kept in `.chat/` (gitignored) and survives server restarts and hot reloads.
 - **Choosing the agent:** copy `.env.example` to `.env` (gitignored) and set `STUDIO_AGENT=claude` or `STUDIO_AGENT=codex`, then restart the server. Switching agents starts a new agent session; the chat history stays. The CLI must be installed and signed in on the machine running the server; `CLAUDE_BIN` / `CODEX_BIN` point to it if it isn't on the `PATH`. `STUDIO_AGENT_MODEL` overrides the model.
@@ -182,6 +182,9 @@ Tools can extend other tool classes (`Base:extend({...})`, overriding methods an
 | `ctx:beginUndo(name)` | Open a waypoint across multiple events; returns `{ commit, cancel }` |
 | `ctx:confirm({ title?, message, confirmText?, cancelText? })` | Modal confirmation dialog in the viewport; yields, returns true/false |
 | `ctx:refreshShutdownButtons()` | Re-query `canAccept()` now (Accept/Cancel tools) |
+| `ctx:setStatus(text?)` | Status line under the tool's name in the palette (nil hides it) |
+| `ctx:setSettingState(key, { visible?, enabled?, label?, tooltip? })` | Show/hide, enable/disable, relabel or change the tooltip of one setting's widget (any type, including `"button"` actions, which call the tool's `onAction(key)`) |
+| `ctx:createViewportPanel({ position? }?)` | A system-styled Frame in the viewport (`"Top"`, `"TopLeft"`, `"TopRight"`) for UI that doesn't fit the settings panel; clicks on it don't reach the tool. Style its contents with `SDK.ViewportStyle` |
 | `ctx:askAgent(prompt, { cancelOnDeactivate? }?)` | Send a prompt to the Tools Agent, which can edit the place through the Roblox Studio MCP. Returns an `AgentRequest` right away: `:await()` (yields), `:onFinished(fn)`, `:cancel()`, `.status`. See "Tools Agent requests" in docs/TOOLPACKS.md |
 | `ctx:connect(signal, fn)`, `ctx:addCleanup(task)` | Auto-cleaned on deactivate |
 | `ctx:log(...)` | Prefixed print |

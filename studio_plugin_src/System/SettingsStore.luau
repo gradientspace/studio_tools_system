@@ -4,9 +4,15 @@
 
 	Supported setting types:
 	  number   { min?, max?, step? }
+	  integer  { min?, max?, step? }  like number, but always a whole number
+	  string   { maxLength? }
 	  boolean
 	  color    (Color3; stored as hex) { presets? = { Color3 } }
 	  enum     { options = { string } }
+	  button   an action (Tool:onAction), not a value: never stored
+	  label    display-only text, not a value: never stored
+
+	(A schema's `extended` options only affect how the palette shows it.)
 ]]
 
 local SETTINGS_KEY_PREFIX = "StudioToolsSystem.ToolSettings."
@@ -16,18 +22,30 @@ SettingsStore.__index = SettingsStore
 
 local function coerce(schema: any, value: any): any
 	local kind = schema.type
-	if kind == "number" then
-		if type(value) ~= "number" or value ~= value then
+	if kind == "number" or kind == "integer" then
+		if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
 			return nil
 		end
-		if schema.step then
-			value = math.round(value / schema.step) * schema.step
+		local step = schema.step
+		if kind == "integer" then
+			step = math.max(1, math.round(step or 1))
+		end
+		if step and step > 0 then
+			value = math.round(value / step) * step
 		end
 		if schema.min then
-			value = math.max(value, schema.min)
+			value = math.max(value, if kind == "integer" then math.ceil(schema.min) else schema.min)
 		end
 		if schema.max then
-			value = math.min(value, schema.max)
+			value = math.min(value, if kind == "integer" then math.floor(schema.max) else schema.max)
+		end
+		return value
+	elseif kind == "string" then
+		if type(value) ~= "string" then
+			return nil
+		end
+		if type(schema.maxLength) == "number" and #value > schema.maxLength then
+			value = string.sub(value, 1, schema.maxLength)
 		end
 		return value
 	elseif kind == "boolean" then
@@ -42,6 +60,8 @@ local function coerce(schema: any, value: any): any
 		return nil
 	elseif kind == "enum" then
 		return if table.find(schema.options or {}, value) then value else nil
+	elseif kind == "button" or kind == "label" then
+		return nil
 	end
 	return value
 end

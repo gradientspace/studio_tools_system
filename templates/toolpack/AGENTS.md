@@ -30,6 +30,7 @@ The full contract is in `$STUDIO_TOOLS/docs/TOOLPACKS.md`. Read it before writin
 - Every tool declares `apiVersion` explicitly.
 - Take mouse input through input behaviors (`self:addInputBehavior(SDK.SingleClickInputBehavior:new({...}))`, `ClickDragInputBehavior`, `ClickOrDragInputBehavior`, `HoverInputBehavior`), not mouse events. Behavior callbacks must not yield; use `task.spawn` for slow work.
 - Connect and create through `ctx` (`ctx:createHighlight`, `ctx:connect`, ...) so everything is cleaned up on deactivate.
+- Give tools their controls through the settings panel: values as `settings`, actions as `type = "button"` settings handled in `onAction(key)`, progress with `ctx:setStatus(text)`, and `ctx:setSettingState(key, { visible, enabled, label, tooltip })` to change widgets as the tool runs. Every setting can have a `tooltip`. Only UI that truly needs the viewport goes in a panel from `ctx:createViewportPanel()`; never create your own ScreenGui. See "Settings" and "Viewport panels" in `docs/TOOLPACKS.md`.
 - Put changes to the place inside `ctx:recordUndo` / `ctx:beginUndo`.
 - No side effects at module load: every module is required to validate the pack.
 - Only require things inside this pack, plus the SDK.

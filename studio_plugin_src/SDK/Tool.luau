@@ -129,6 +129,10 @@ function Tool:removeInputBehavior(behavior: any)
 	end
 end
 
+-- Called when the user clicks one of the tool's "button" settings, with the
+-- setting's key. Runs in its own thread, so it may yield. Default: nothing.
+function Tool:onAction(_key: string) end
+
 -- Polled while an Accept/Cancel tool is active. Return false to disable the
 -- Accept button, optionally with a short explanation shown as its tooltip.
 -- Default: always allowed.

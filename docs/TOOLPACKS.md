@@ -65,7 +65,7 @@ In Studio, the pack's source folder appears as `StudioTools.Packs.<packId>`, so 
 | --- | --- | --- |
 | `id` | yes | Unique across all packs; letters, digits, `_`, `-`. Stable: saved tool settings are keyed on it. |
 | `apiVersion` | yes | The Studio Tools API version the pack targets (see Versioning). |
-| `tab` | no | Palette tab the pack's tools appear in (default `"Core"`, at most 24 characters). Packs naming the same tab share it; tabs appear in the order of the first pack that names them in the config. |
+| `tab` | no | Palette tab the pack's tools appear in (default `"Core"`, at most 24 characters). Packs naming the same tab share it; tabs appear in the order of the first pack that names them in the config. A tool can override it with its own `tab` (see Tabs and sections). |
 | `name` | no | Shown as a heading when a tab holds tools from several packs (defaults to `id`). |
 | `version` | no | The pack's own version, shown next to its heading in shared tabs. Semver recommended. |
 | `description` | no | Free text. |
@@ -126,6 +126,8 @@ local MyTool = SDK.Tool:extend({
 	version = "1.0.0",              -- optional; the tool's own version
 	description = "What it does.",  -- optional
 	order = 10,                     -- optional; sort order within the pack
+	tab = "Model",                  -- optional; palette tab (default: the pack's tab)
+	section = "Blocks",             -- optional; section within the tab (default: the pack's name)
 	settings = { ... },             -- optional; see Settings
 })
 
@@ -137,6 +139,10 @@ function MyTool:deactivate(ctx: SDK.ToolContext, reason: SDK.ShutdownReason)
 	-- optional; reason is "Done", "Accept", "Cancel" or "Force"
 end
 
+function MyTool:onAction(key: string)
+	-- optional; a "button" setting was clicked (see Settings)
+end
+
 return MyTool
 ```
 
@@ -144,10 +150,13 @@ When the user picks the tool, the framework creates a fresh **instance**, `setme
 
 Its full id is `<packId>/<toolId>`, e.g. `core/PlaceBlock`.
 
+**Tabs and sections.** The palette shows one tab per tab name and lays out each tab's tools in sections. A tool's tab is its `tab` field, or else its pack's `tab`; its section is its `section` field, or else its pack's `name`. So by default each pack's tools form one section in the pack's tab, and setting `tab` / `section` lets one pack spread its tools over several tabs, or several packs share a section. Tabs and sections appear in order of first appearance: packs in config order, tools in `order` within each pack. A tab with more than one section shows a label above each.
+
 A tool is rejected, with a warning in Studio's Output window, if:
 - the module doesn't return a class derived from `SDK.Tool`;
 - `apiVersion` is missing or not supported;
 - `id` or `name` is missing, or `id` is a duplicate within the pack;
+- `tab` or `section` is set but isn't a non-empty string (or `tab` is over 24 characters);
 - `activate` isn't overridden.
 
 ### Shutdown overlay
@@ -335,16 +344,80 @@ A base class that has to live in `Tools/` (for example, so other packs can find 
 
 ### Settings
 
-`settings` is an array of schemas. Values appear in the palette, are saved across Studio sessions, and are available as `ctx.settings[key]`. `ctx:onSettingChanged(fn(key, value))` fires on edits.
+`settings` is an array of schemas, and the palette builds the tool's settings panel from it, in order. Tools never create settings widgets themselves. Values are saved across Studio sessions and are available as `ctx.settings[key]`. `ctx:onSettingChanged(fn(key, value))` fires on edits.
 
-| `type` | Extra fields | Value |
+| `type` | Extra fields | Widget | Value |
+| --- | --- | --- | --- |
+| `"number"` | `min`, `max`, `step` | text field, or a slider (`extended.widget`) | number, snapped to `step` and clamped to `min`/`max` |
+| `"integer"` | `min`, `max`, `step` (whole, default 1) | text field, or a slider (`extended.widget`) | whole number |
+| `"string"` | `maxLength` | text field | string |
+| `"boolean"` | | On/Off toggle | boolean |
+| `"color"` | `presets` (array of Color3) | swatch that opens a color picker (saturation/brightness square, hue bar, hex field, the presets) | Color3 |
+| `"enum"` | `options` (array of strings) | dropdown | one of `options` |
+| `"button"` | | full-width button | none: an action (see below) |
+| `"label"` | | full-width text (its `label`) | none: display only |
+
+Every schema has `key` and `type`, optionally `label`, `tooltip` and `extended`, and every type except `"button"` and `"label"` has a `default`. A `tooltip` shows when the mouse rests on the setting's row for half a second. A `"label"` row shows its `label` as wrapped text; change the text with `ctx:setSettingState(key, { label = ... })`.
+
+**Extended options.** `extended` is a table of presentation options; they change how a setting is shown, never its value, and options that don't apply to the type are ignored:
+
+| Option | Types | Meaning |
 | --- | --- | --- |
-| `"number"` | `min`, `max`, `step` | number |
-| `"boolean"` | | boolean |
-| `"color"` | `presets` (array of Color3) | Color3 |
-| `"enum"` | `options` (array of strings) | one of `options` |
+| `widget = "field"` / `"slider"` | number, integer | A text field (default) or a slider with the value in a small field beside it. A slider needs `min` and `max`; without them it falls back to a field, with a warning. |
+| `placeholder = "..."` | string | Grey hint text while the field is empty. |
 
-Every schema has `key`, `type` and `default`, and optionally `label`.
+```lua
+settings = {
+	{ key = "radius", label = "Radius", type = "number", default = 8, min = 1, max = 64, step = 0.5, extended = { widget = "slider" } },
+	{ key = "count", label = "Count", type = "integer", default = 5, min = 1, max = 50, tooltip = "How many to place" },
+	{ key = "name", label = "Name", type = "string", default = "", maxLength = 40, extended = { placeholder = "Model name" } },
+	{ key = "info", label = "Select parts, then press Generate.", type = "label" },
+}
+```
+
+Sliders and the color picker change the value continuously while dragging, so `ctx:onSettingChanged` fires for each step.
+
+**Actions.** A `"button"` setting is drawn as a full-width button labeled `label`. Clicking it calls the tool's `onAction(key)` method, in its own thread, so it may yield:
+
+```lua
+local MyTool = SDK.Tool:extend({
+	...
+	settings = {
+		{ key = "segments", label = "Segments", type = "number", default = 9, min = 3, max = 40, step = 1 },
+		{ key = "generate", label = "Generate", type = "button", tooltip = "Build it from the selection" },
+	},
+})
+
+function MyTool:onAction(key: string)
+	if key == "generate" then
+		self.ctx:setSettingState("generate", { enabled = false, label = "Working..." })
+		...
+	end
+end
+```
+
+**Widget state.** `ctx:setSettingState(key, { visible?, enabled?, label?, tooltip? })` shows or hides a setting's row, enables or disables it (a disabled widget is greyed out and can't be edited or clicked), replaces its label (a button's text) or its tooltip (`""` removes it). It works for every type. Only the fields given change, and every widget starts visible, enabled, and with its schema's label and tooltip each time the tool activates.
+
+**Status line.** `ctx:setStatus(text)` shows a line of text under the tool's name in the palette, e.g. progress or the result of an action; `ctx:setStatus(nil)` hides it.
+
+Status and widget-state changes update the palette in place, so they don't interrupt a value the user is typing.
+
+### Viewport panels
+
+Put a tool's controls in its settings panel: values as settings, actions as `"button"` settings, and progress in the status line. When a tool needs UI in the viewport itself, it asks the system for a panel instead of creating its own ScreenGui:
+
+```lua
+local panel = ctx:createViewportPanel({ position = "Top" }) -- or "TopLeft", "TopRight"
+local label = Instance.new("TextLabel")
+label.Text = "Hello"
+label.TextColor3 = SDK.ViewportStyle.text
+label.Parent = panel
+```
+
+- `createViewportPanel` returns a Frame styled like the system's viewport UI (the Tools Agent chat): dark background, rounded corners, padding, sized to its contents, with a horizontal `UIListLayout` named `Layout`. Fill it with your own GUI objects. You may restyle it, e.g. change its colors or set `panel.Layout.FillDirection` to Vertical.
+- `SDK.ViewportStyle` has the colors, fonts and sizes of that style (`panel`, `field`, `button`, `accent`, `text`, `dimText`, `errorText`, `font`, `boldFont`, `textSize`, `cornerRadius`, `padding`, `rowHeight`), for styling the panel's contents to match.
+- Clicks inside a panel don't reach the tool's input behaviors, so clicking a button on it won't also pick the part behind it. Keep the panel's contents inside its bounds: only the panel's own area is protected.
+- Panels at the same position stack downward. They're removed when the tool deactivates.
 
 ### ToolContext
 
@@ -354,6 +427,7 @@ The `ctx` passed to tools. Its type is `SDK.ToolContext`; the README has the ful
 - **Picking:** `raycastAt`, `partAt`, at an input point.
 - **Previews:** `createBoxPreview`, `createHighlight`.
 - **Undo:** `recordUndo`, `beginUndo`, `onUndoRedo`.
+- **Tool UI:** `setStatus`, `setSettingState` (see Settings), `createViewportPanel` (see Viewport panels).
 - **Tools Agent:** `askAgent` (see below).
 - **Cleanup:** `connect`, `addCleanup`.
 

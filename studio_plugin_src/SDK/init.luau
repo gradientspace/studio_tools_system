@@ -14,6 +14,7 @@ local Maid = require(script.Maid)
 local Signal = require(script.Signal)
 local Tool = require(script.Tool)
 local Types = require(script.Types)
+local ViewportStyle = require(script.ViewportStyle)
 local InputBehavior = require(script.Input.InputBehavior)
 local SingleClickInputBehavior = require(script.Input.SingleClickInputBehavior)
 local ClickDragInputBehavior = require(script.Input.ClickDragInputBehavior)
@@ -21,6 +22,7 @@ local ClickOrDragInputBehavior = require(script.Input.ClickOrDragInputBehavior)
 local HoverInputBehavior = require(script.Input.HoverInputBehavior)
 
 export type SettingSchema = Types.SettingSchema
+export type SettingExtendedOptions = Types.SettingExtendedOptions
 export type ToolContext = Types.ToolContext
 export type ToolDefinition = Types.ToolDefinition
 export type UndoRecording = Types.UndoRecording
@@ -53,6 +55,10 @@ export type AgentRequestStatus = Types.AgentRequestStatus
 export type AgentResult = Types.AgentResult
 export type AgentRequest = Types.AgentRequest
 export type AskAgentOptions = Types.AskAgentOptions
+export type SettingState = Types.SettingState
+export type ViewportPanelPosition = Types.ViewportPanelPosition
+export type ViewportPanelOptions = Types.ViewportPanelOptions
+export type ViewportStyle = Types.ViewportStyle
 
 -- Bumped on breaking changes to the tool/pack contract. (server/sdk.js reads
 -- this line when generating pack SDK files, so keep the format.)
@@ -97,6 +103,8 @@ local SDK = {
 	HoverInputBehavior = HoverInputBehavior,
 	Maid = Maid,
 	Signal = Signal,
+	-- Colors and sizes of the system's viewport UI (see ctx:createViewportPanel).
+	ViewportStyle = ViewportStyle,
 }
 
 function SDK.isApiVersionSupported(apiVersion: any): boolean
