@@ -330,6 +330,9 @@ export type ToolContext = {
 	isShiftDown: (self: ToolContext) -> boolean,
 	onKey: (self: ToolContext, fn: (InputObject, boolean) -> ()) -> (),
 	onSettingChanged: (self: ToolContext, fn: (string, any) -> ()) -> any,
+	-- Changes one of the tool's settings as if the user had edited it (saved,
+	-- shown in the palette, onSettingChanged handlers run).
+	setSetting: (self: ToolContext, key: string, value: any) -> (),
 	-- fn(action, waypointName) after the user undoes or redoes while the tool is active.
 	onUndoRedo: (self: ToolContext, fn: (UndoAction, string) -> ()) -> (),
 
@@ -346,9 +349,29 @@ export type ToolContext = {
 
 	createBoxPreview: (self: ToolContext) -> BoxHandleAdornment,
 	createHighlight: (self: ToolContext, color: Color3?) -> SelectionBox,
+	-- Any HandleAdornment class by name ("LineHandleAdornment",
+	-- "SphereHandleAdornment", ...), adorning the Terrain so its CFrame is
+	-- world space. Never saved or recorded; removed on deactivate.
+	createAdornment: (self: ToolContext, className: string) -> HandleAdornment,
+	-- A Model in the Workspace for temporary 3D content (e.g. a preview
+	-- mesh). It and its contents are non-archivable (never saved, copied or
+	-- recorded in undo history), its parts are locked and ignored by
+	-- raycastAt, and it's destroyed on deactivate.
+	createTemporaryModel: (self: ToolContext, name: string?) -> Model,
+	-- Moves the camera to frame a box (center/orientation and size), keeping
+	-- the view direction, and orbits around its center afterwards. Animated.
+	focusView: (self: ToolContext, cframe: CFrame, size: Vector3) -> (),
+	-- Pans the camera (no rotation or zoom) to put a world point at the
+	-- center of the view, and orbits around it afterwards. Animated.
+	centerView: (self: ToolContext, point: Vector3) -> (),
 
 	beginUndo: (self: ToolContext, name: string) -> UndoRecording,
 	recordUndo: (self: ToolContext, name: string, fn: (...any) -> ...any, ...any) -> (boolean, any),
+	-- Adds a Studio undo waypoint for a change the tool already made to its
+	-- own state (not the place, e.g. a mesh it keeps in memory). undo() and
+	-- redo() run when the user undoes/redoes it while the tool is active;
+	-- they must not yield. Afterwards the waypoints remain but do nothing.
+	addUndoStep: (self: ToolContext, name: string, undo: () -> (), redo: () -> ()) -> (),
 
 	-- Sends a prompt to the Tools Agent, which can edit the place through the
 	-- Roblox Studio MCP. Returns right away (never yields).
@@ -424,6 +447,11 @@ export type ToolDefinition = {
 	-- Shutdown overlay configuration; read by the default getShutdownOptions().
 	shutdown: ShutdownOptions?,
 
+	-- Called on the class (no ctx) to ask whether the tool can start now, e.g.
+	-- whether a suitable selection exists. Return false and a short reason to
+	-- grey out its palette button. Asked again when the selection changes;
+	-- must be quick and must not yield. Default: always.
+	canActivate: (self: any) -> (boolean, string?),
 	activate: (self: any, ctx: ToolContext) -> (),
 	deactivate: (self: any, ctx: ToolContext, reason: ShutdownReason) -> (),
 	-- Called right after activate(). Override for options that depend on state.
@@ -463,6 +491,7 @@ export type Maid = {
 export type ToolClass = {
 	extend: (self: any, definition: { [string]: any }?) -> any,
 	isSubclass: (value: any) -> boolean,
+	canActivate: (self: any) -> (boolean, string?),
 	activate: (self: any, ctx: ToolContext) -> (),
 	deactivate: (self: any, ctx: ToolContext, reason: ShutdownReason) -> (),
 	getShutdownOptions: (self: any) -> ShutdownOptions,

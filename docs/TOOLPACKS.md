@@ -143,6 +143,11 @@ function MyTool:onAction(key: string)
 	-- optional; a "button" setting was clicked (see Settings)
 end
 
+function MyTool:canActivate(): (boolean, string?)
+	-- optional; called on the class: can the tool start now? (see below)
+	return true
+end
+
 return MyTool
 ```
 
@@ -151,6 +156,18 @@ When the user picks the tool, the framework creates a fresh **instance**, `setme
 Its full id is `<packId>/<toolId>`, e.g. `core/PlaceBlock`.
 
 **Tabs and sections.** The palette shows one tab per tab name and lays out each tab's tools in sections. A tool's tab is its `tab` field, or else its pack's `tab`; its section is its `section` field, or else its pack's `name`. So by default each pack's tools form one section in the pack's tab, and setting `tab` / `section` lets one pack spread its tools over several tabs, or several packs share a section. Tabs and sections appear in order of first appearance: packs in config order, tools in `order` within each pack. A tab with more than one section shows a label above each.
+
+**Starting conditions.** A tool that only makes sense in some situations, e.g. with a MeshPart selected, overrides `canActivate()`. It's called on the class (`self` is the tool class; there is no `ctx` yet) whenever the palette shows the tool and again after every selection change. Returning `false, "reason"` greys out the tool's button and adds the reason to its tooltip; the system won't start the tool then. It must be quick and must not yield (a yielding or erroring `canActivate` counts as available). The tool should still check in `activate()` what it needs.
+
+```lua
+function Sculpt:canActivate(): (boolean, string?)
+	local selected = game:GetService("Selection"):Get()
+	if #selected == 1 and selected[1]:IsA("MeshPart") then
+		return true
+	end
+	return false, "Select a MeshPart to sculpt."
+end
+```
 
 A tool is rejected, with a warning in Studio's Output window, if:
 - the module doesn't return a class derived from `SDK.Tool`;
@@ -344,7 +361,7 @@ A base class that has to live in `Tools/` (for example, so other packs can find 
 
 ### Settings
 
-`settings` is an array of schemas, and the palette builds the tool's settings panel from it, in order. Tools never create settings widgets themselves. Values are saved across Studio sessions and are available as `ctx.settings[key]`. `ctx:onSettingChanged(fn(key, value))` fires on edits.
+`settings` is an array of schemas, and the palette builds the tool's settings panel from it, in order. Tools never create settings widgets themselves. Values are saved across Studio sessions and are available as `ctx.settings[key]`. `ctx:onSettingChanged(fn(key, value))` fires on edits. A tool can change its own settings with `ctx:setSetting(key, value)` (e.g. from a keyboard shortcut): the value is coerced and saved like an edit, the palette shows it, and `onSettingChanged` handlers run.
 
 | `type` | Extra fields | Widget | Value |
 | --- | --- | --- | --- |
@@ -425,11 +442,24 @@ The `ctx` passed to tools. Its type is `SDK.ToolContext`; the README has the ful
 - **State:** `ctx.settings`, `ctx.state`, `ctx.toolId`.
 - **Input:** `inputBehaviorsChanged`, `refreshInput` (see Input); keyboard: `isKeyDown`, `isShiftDown`, `onKey`.
 - **Picking:** `raycastAt`, `partAt`, at an input point.
-- **Previews:** `createBoxPreview`, `createHighlight`.
-- **Undo:** `recordUndo`, `beginUndo`, `onUndoRedo`.
+- **Previews:** `createBoxPreview`, `createHighlight`, `createAdornment`, `createTemporaryModel` (see Temporary scene content).
+- **Undo:** `recordUndo`, `beginUndo`, `onUndoRedo`; `addUndoStep` for the tool's own state (see Undo for tool state).
 - **Tool UI:** `setStatus`, `setSettingState` (see Settings), `createViewportPanel` (see Viewport panels).
+- **Camera:** `focusView(cframe, size)` animates the camera to frame a box (its center and orientation, and its size), keeping the current view direction and making the box center the camera's orbit point. `centerView(point)` pans (no rotation or zoom) so a world point is at the center of the view, and makes it the orbit point. Tools bind these to keys themselves, e.g. F with `ctx:onKey`. (While no tool is active and the palette is open, the system itself binds C to center the view on the surface under the mouse.)
 - **Tools Agent:** `askAgent` (see below).
 - **Cleanup:** `connect`, `addCleanup`.
+
+### Temporary scene content
+
+For previews, `ctx:createAdornment(className)` makes any `HandleAdornment` (`"LineHandleAdornment"`, `"SphereHandleAdornment"`, `"ConeHandleAdornment"`, ...) adorning the Terrain, so its `CFrame` is world space; like `createBoxPreview` it lives in CoreGui. (`CylinderHandleAdornment` rings with an `InnerRadius` don't render; draw rings from line segments.)
+
+For real 3D content, such as a preview mesh, `ctx:createTemporaryModel(name?)` returns a `Model` in the Workspace. It and everything put in it are made non-archivable, so they're never saved with the place, copied, or recorded in undo history (Studio's undo ignores non-archivable instances), and parts in it are locked and ignored by `ctx:raycastAt`. It's destroyed when the tool deactivates. To hide a part of the place while a preview stands in for it, set its `LocalTransparencyModifier`, which is local to Studio and not saved or recorded; restore it in a cleanup.
+
+### Undo for tool state
+
+Studio's undo history only covers the place. A tool that edits state of its own, such as a mesh it keeps in memory, records each edit with `ctx:addUndoStep(name, undo, redo)` after making it. That adds a Studio waypoint named `name`, so Ctrl+Z, Ctrl+Y and the undo buttons undo and redo the tool's edits in order with everything else; `undo()` and `redo()` run while the tool is active and must not yield. Adding a step drops any steps that were undone. After the tool deactivates its waypoints stay in Studio's history but do nothing when undone.
+
+Internally each step sets an attribute (`StudioToolsUndoStep`) on the Workspace, since a waypoint needs a change Studio tracks; the attribute is removed on deactivate.
 
 ### Tools Agent requests
 

@@ -208,6 +208,7 @@ function Palette.new(host: any, manager: any)
 	self.manager = manager
 	self._maid = SDK.Maid.new()
 	self._settingRows = {} -- setting key -> { applyState, setValue }, for the active tool's rows
+	self._availabilityRefreshers = {} -- one per tool button: re-asks canActivate() and restyles it
 	self._statusLabel = nil
 
 	self.scroll = self._maid:add(create("ScrollingFrame", {
@@ -240,6 +241,11 @@ function Palette.new(host: any, manager: any)
 			handle.setValue(value)
 		end
 	end))
+	self._maid:add(manager.availabilityChanged:connect(function()
+		for _, refresh in self._availabilityRefreshers do
+			refresh()
+		end
+	end))
 	self._maid:add(Theme.onChanged(function()
 		self:render()
 	end))
@@ -256,6 +262,7 @@ function Palette:render()
 		self._content:Destroy()
 	end
 	self._settingRows = {}
+	self._availabilityRefreshers = {}
 	self._statusLabel = nil
 	self.scroll.ScrollBarImageColor3 = Theme.color("ScrollBar")
 
@@ -411,11 +418,26 @@ function Palette:_renderToolList(add: (GuiObject) -> GuiObject)
 			}, {
 				create("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6) }),
 			})
+			-- A tool whose canActivate() says no is greyed out, with the reason in its tooltip.
+			local available, why = true, nil
+			local function refreshAvailability()
+				available, why = manager:getAvailability(entry)
+				toolButton.TextTransparency = if available then 0 else DISABLED_TRANSPARENCY
+			end
+			refreshAvailability()
+			table.insert(self._availabilityRefreshers, refreshAvailability)
 			toolButton.Activated:Connect(function()
-				manager:toggle(entry.id)
+				refreshAvailability()
+				if available then
+					manager:toggle(entry.id)
+				end
 			end)
 			self:_attachTooltip(toolButton, function()
-				return entry.definition.description
+				local description = entry.definition.description
+				if available or not why then
+					return description
+				end
+				return if description then description .. "\n\n" .. why else why
 			end)
 		end
 	end

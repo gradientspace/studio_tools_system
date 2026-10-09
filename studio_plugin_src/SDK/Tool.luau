@@ -28,6 +28,10 @@
 			...
 		end
 
+	A tool that can only start in some situations (say, with a MeshPart
+	selected) overrides canActivate(); its palette button is greyed out while
+	that returns false.
+
 	While a tool is active, the system shows a shutdown overlay at the bottom
 	of the viewport: a "Done" button by default, or Accept/Cancel. Configure
 	it with a `shutdown` field (see SDK.ShutdownOptions), or override
@@ -73,6 +77,15 @@ function Tool.isSubclass(value: any): boolean
 		current = getmetatable(current)
 	end
 	return false
+end
+
+-- Called on the class (self is the tool class; there's no ctx yet) to ask
+-- whether the tool can be started now, e.g. because it needs a certain
+-- selection. Return false and a short reason to grey out its palette button
+-- (the reason shows in the button's tooltip). The system asks again when the
+-- selection changes, so it must be quick and must not yield. Default: always.
+function Tool:canActivate(): (boolean, string?)
+	return true, nil
 end
 
 -- Called when the tool becomes active. Must be overridden.

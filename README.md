@@ -171,15 +171,21 @@ Tools can extend other tool classes (`Base:extend({...})`, overriding methods an
 | `ctx:refreshInput()` | Re-run hover and capture at the current mouse position (automatic after undo/redo, setting edits and camera moves) |
 | `ctx:isKeyDown(...KeyCode)`, `ctx:isShiftDown()` | Modifier/key state |
 | `ctx:onKey(fn(input, isDown))` | Keyboard input in the viewport |
-| `ctx:onSettingChanged(fn(key, value))` | User edited a setting in the palette |
+| `ctx:onSettingChanged(fn(key, value))` | A setting changed (edited in the palette, or `ctx:setSetting`) |
+| `ctx:setSetting(key, value)` | Change one of the tool's settings as if the user had (e.g. a keyboard shortcut for brush size) |
 | `ctx:onUndoRedo(fn(action, waypointName))` | User undid/redid while the tool is active; resync any state about the place |
 | `ctx:raycastAt(point, maxDistance?, exclude?)` | Raycast along an `InputPoint`'s ray (input behaviors pass points to their callbacks) |
 | `ctx:partAt(point)` | Unlocked, non-terrain `BasePart` at the point, plus the `RaycastResult` |
 | `ctx:excludeFromRaycast(instance)` | Ignore an instance in `raycastAt` and `partAt` |
 | `ctx:createBoxPreview()` | `BoxHandleAdornment` in world space (CoreGui; never saved, no undo) |
 | `ctx:createHighlight(color?)` | `SelectionBox` in CoreGui; set `.Adornee` |
+| `ctx:createAdornment(className)` | Any `HandleAdornment` (`"LineHandleAdornment"`, `"SphereHandleAdornment"`, ...) in world space (CoreGui; never saved, no undo) |
+| `ctx:focusView(cframe, size)` | Animate the camera to frame a box, keeping the view direction; the box center becomes the orbit point |
+| `ctx:centerView(point)` | Animate a pan (no rotation or zoom) that puts a world point at the view center; it becomes the orbit point |
+| `ctx:createTemporaryModel(name?)` | A non-archivable `Model` in the Workspace for temporary 3D content (never saved, copied or in undo history; parts locked and ignored by `raycastAt`) |
 | `ctx:recordUndo(name, fn, ...)` | Run `fn` as one undo waypoint (cancelled if it errors) |
 | `ctx:beginUndo(name)` | Open a waypoint across multiple events; returns `{ commit, cancel }` |
+| `ctx:addUndoStep(name, undo, redo)` | A Studio undo waypoint for a change to the tool's own state (not the place); Ctrl+Z/Ctrl+Y call `undo`/`redo` while the tool is active |
 | `ctx:confirm({ title?, message, confirmText?, cancelText? })` | Modal confirmation dialog in the viewport; yields, returns true/false |
 | `ctx:refreshShutdownButtons()` | Re-query `canAccept()` now (Accept/Cancel tools) |
 | `ctx:setStatus(text?)` | Status line under the tool's name in the palette (nil hides it) |

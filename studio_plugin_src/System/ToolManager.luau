@@ -42,11 +42,22 @@
 	reset on activation. Changes fire toolUiChanged, so the palette can
 	update those widgets in place instead of re-rendering. Clicking a
 	"button" setting calls runAction(key), which calls the tool's onAction.
+
+	A tool class can override canActivate() to say it can't start right now
+	(e.g. nothing suitable is selected). getAvailability() asks it; activate()
+	refuses unavailable tools, and availabilityChanged fires when the
+	selection changes so the palette can grey buttons out.
+
+	System hotkeys: while the palette is open and no tool is active, C pans
+	the camera to center the surface under the mouse (tools that want C
+	handle it themselves, e.g. with ctx:centerView).
 ]]
 
+local Selection = game:GetService("Selection")
 local UserInputService = game:GetService("UserInputService")
 
 local SDK = require(script.Parent.Parent.SDK)
+local CameraMotion = require(script.Parent.CameraMotion)
 local InputManager = require(script.Parent.InputManager)
 local SettingsStore = require(script.Parent.SettingsStore)
 local ViewportOverlay = require(script.Parent.ViewportOverlay)
@@ -167,11 +178,15 @@ function ToolManager.new(host: any, packsFolder: Instance?, options: any?)
 	self.toolUiChanged = Signal.new()
 	-- (toolId, key, value) after a setting edit; the palette updates that widget in place.
 	self.settingChanged = Signal.new()
+	-- Fires when tools' canActivate() answers may have changed (the selection changed).
+	self.availabilityChanged = Signal.new()
+	self._availabilityWarned = {} -- tool id -> true once its canActivate() error was reported
 	self.store = SettingsStore.new(host.plugin)
 	self._maid = Maid.new()
 	self._maid:add(self.changed)
 	self._maid:add(self.toolUiChanged)
 	self._maid:add(self.settingChanged)
+	self._maid:add(self.availabilityChanged)
 	self.overlay = self._maid:add(ViewportOverlay.new())
 	self._extraInputBlocked = options and options.isInputBlocked
 	self.input = self._maid:add(InputManager.new(self.plugin, {
@@ -196,12 +211,57 @@ function ToolManager.new(host: any, packsFolder: Instance?, options: any?)
 		end
 	end))
 
+	self._maid:add(UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed or input.KeyCode ~= Enum.KeyCode.C then
+			return
+		end
+		self:_centerOnMouse()
+	end))
+
+	-- canActivate() usually depends on the selection; coalesce bursts of changes.
+	local availabilityPending = false
+	self._maid:add(Selection.SelectionChanged:Connect(function()
+		if availabilityPending then
+			return
+		end
+		availabilityPending = true
+		task.defer(function()
+			availabilityPending = false
+			self.availabilityChanged:fire()
+		end)
+	end))
+
 	-- Fires when a built-in Studio tool or another plugin takes over the viewport.
 	self._maid:add(self.plugin.Deactivation:Connect(function()
 		self:deactivate(Reason.Force, true)
 	end))
 
 	return self
+end
+
+-- The C hotkey with no tool active: center the view on the surface under
+-- the mouse, if there is one. Only while the palette is open, and not with
+-- modifiers (Ctrl+C is copy) or while typing.
+function ToolManager:_centerOnMouse()
+	local widget = self.host.widget
+	if self.activeTool or (widget and not widget.Enabled) or UserInputService:GetFocusedTextBox() then
+		return
+	end
+	for _, key in { Enum.KeyCode.LeftControl, Enum.KeyCode.RightControl, Enum.KeyCode.LeftAlt, Enum.KeyCode.RightAlt, Enum.KeyCode.LeftShift, Enum.KeyCode.RightShift, Enum.KeyCode.LeftSuper, Enum.KeyCode.RightSuper } do
+		if UserInputService:IsKeyDown(key) then
+			return
+		end
+	end
+	local camera = workspace.CurrentCamera
+	if not camera then
+		return
+	end
+	local mouse = UserInputService:GetMouseLocation()
+	local ray = camera:ViewportPointToRay(mouse.X, mouse.Y)
+	local hit = workspace:Raycast(ray.Origin, ray.Direction * 10000)
+	if hit then
+		CameraMotion.center(hit.Position)
+	end
 end
 
 -- True while viewport clicks shouldn't reach the tool: the mouse is over
@@ -312,9 +372,35 @@ function ToolManager:getSettings(entry: any): { [string]: any }
 	return self.store:get(entry)
 end
 
+-- Whether a tool can be started now (its class's canActivate()), and why
+-- not. A canActivate() that errors or yields counts as available.
+function ToolManager:getAvailability(entry: any): (boolean, string?)
+	local definition = entry.definition
+	local ok, allowed, why
+	local thread = coroutine.create(function()
+		ok, allowed, why = xpcall(definition.canActivate, debug.traceback, definition)
+	end)
+	coroutine.resume(thread)
+	if coroutine.status(thread) ~= "dead" then
+		coroutine.close(thread)
+		ok, allowed = false, "canActivate() yielded"
+	end
+	if not ok then
+		if not self._availabilityWarned[entry.id] then
+			self._availabilityWarned[entry.id] = true
+			warn(string.format("[StudioTools] Tool '%s' canActivate() failed; treating it as available:\n%s", entry.id, tostring(allowed)))
+		end
+		return true, nil
+	end
+	return allowed ~= false, if type(why) == "string" then why else nil
+end
+
 function ToolManager:activate(id: string)
 	local entry = self.toolsById[id]
 	if not entry or self.activeTool == entry then
+		return
+	end
+	if not self:getAvailability(entry) then
 		return
 	end
 	self:deactivate(Reason.Force, true)
@@ -348,6 +434,15 @@ function ToolManager:activate(id: string)
 		setSettingState = function(key, state)
 			if self.activeContext == ctx then
 				self:_setSettingState(entry, key, state)
+			end
+		end,
+		setSetting = function(key, value)
+			if self.activeContext == ctx then
+				if not self.store:getSchema(entry, key) then
+					warn(string.format("[StudioTools] Tool '%s': setSetting: no setting '%s'", entry.id, tostring(key)))
+					return
+				end
+				self:setSetting(entry.id, key, value)
 			end
 		end,
 	})

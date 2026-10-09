@@ -22,6 +22,7 @@ local UserInputService = game:GetService("UserInputService")
 
 local SDK = require(script.Parent.Parent.SDK)
 local AgentRequests = require(script.Parent.AgentRequests)
+local CameraMotion = require(script.Parent.CameraMotion)
 local Maid = SDK.Maid
 local Signal = SDK.Signal
 
@@ -52,9 +53,13 @@ function ToolContext.new(host: any, entry: any, settings: { [string]: any }, opt
 	self._refreshInput = options.refreshInput
 	self._setStatus = options.setStatus
 	self._setSettingState = options.setSettingState
+	self._setSetting = options.setSetting
 	self._panels = {} :: { Frame } -- from createViewportPanel
 	self._panelGui = nil :: ScreenGui?
 	self._panelColumns = {} :: { [string]: Frame } -- position -> container
+	self._undoSteps = nil :: { { name: string, undo: () -> (), redo: () -> () } }? -- from addUndoStep
+	self._undoApplied = 0 -- how many of _undoSteps are currently applied
+	self._undoToken = nil :: string?
 	return self
 end
 
@@ -115,7 +120,17 @@ function ToolContext:onKey(fn: (InputObject, boolean) -> ())
 	end)
 end
 
--- fn(key, value) fires when the user edits one of this tool's settings in the palette.
+-- Changes one of this tool's settings, as if the user had edited it: the
+-- value is coerced and saved, the palette shows it, and onSettingChanged
+-- handlers run.
+function ToolContext:setSetting(key: string, value: any)
+	if self._setSetting then
+		self._setSetting(key, value)
+	end
+end
+
+-- fn(key, value) fires when one of this tool's settings changes (edited in
+-- the palette, or set with ctx:setSetting).
 function ToolContext:onSettingChanged(fn: (string, any) -> ())
 	return self._maid:add(self._settingChanged:connect(fn))
 end
@@ -184,6 +199,43 @@ function ToolContext:createHighlight(color: Color3?): SelectionBox
 	return self:addCleanup(selectionBox)
 end
 
+-- Any HandleAdornment class (LineHandleAdornment, SphereHandleAdornment,
+-- ConeHandleAdornment, ...), adorning the Terrain so its CFrame is world
+-- space. Visible, with default properties otherwise.
+function ToolContext:createAdornment(className: string): HandleAdornment
+	local ok, adornment = pcall(Instance.new, className)
+	if not ok or not adornment:IsA("HandleAdornment") then
+		if ok then
+			adornment:Destroy()
+		end
+		error(string.format("ctx:createAdornment: '%s' is not a HandleAdornment class", tostring(className)), 2)
+	end
+	adornment.Name = "StudioToolsAdornment"
+	adornment.Adornee = workspace.Terrain
+	adornment.Parent = CoreGui
+	return self:addCleanup(adornment)
+end
+
+-- A Model in the Workspace for temporary 3D content, such as a preview mesh.
+-- It and everything put in it are made non-archivable, so they're never
+-- saved, copied or recorded in undo history; parts in it are locked and
+-- ignored by ctx:raycastAt. It's destroyed when the tool deactivates.
+function ToolContext:createTemporaryModel(name: string?): Model
+	local model = Instance.new("Model")
+	model.Name = name or "StudioToolsTemporary"
+	model.Archivable = false
+	local function prepare(descendant: Instance)
+		descendant.Archivable = false
+		if descendant:IsA("BasePart") then
+			descendant.Locked = true
+		end
+	end
+	self:connect(model.DescendantAdded, prepare)
+	self:excludeFromRaycast(model)
+	model.Parent = workspace
+	return self:addCleanup(model)
+end
+
 -- Undo ------------------------------------------------------------------
 
 -- Begins an undo waypoint. Call :commit() or :cancel() on the result. A
@@ -234,6 +286,115 @@ function ToolContext:recordUndo(name: string, fn: (...any) -> ...any, ...: any):
 		warn(string.format("[StudioTools] %s failed: %s", name, tostring(result)))
 	end
 	return ok, result
+end
+
+-- Camera --------------------------------------------------------------------
+-- Animated moves shared with the system's own hotkeys (see CameraMotion).
+
+-- Moves the camera to frame a box (cframe = its center and orientation,
+-- size = its extents), keeping the current view direction, and makes the box
+-- center the camera's orbit point. Animated briefly; a newer move takes over.
+function ToolContext:focusView(cframe: CFrame, size: Vector3)
+	if typeof(cframe) ~= "CFrame" or typeof(size) ~= "Vector3" then
+		error("ctx:focusView: expected (cframe: CFrame, size: Vector3)", 2)
+	end
+	CameraMotion.frame(cframe, size)
+end
+
+-- Pans the camera (no rotation, no zoom) so that a world point is at the
+-- center of the view, and makes it the camera's orbit point. Animated.
+function ToolContext:centerView(point: Vector3)
+	if typeof(point) ~= "Vector3" then
+		error("ctx:centerView: expected (point: Vector3)", 2)
+	end
+	CameraMotion.center(point)
+end
+
+-- Undo steps for the tool's own state ----------------------------------------
+-- Studio's undo history only covers the place. A tool that edits state of
+-- its own (e.g. a mesh it keeps in memory) adds undo steps instead: each one
+-- records a Studio waypoint, so Ctrl+Z / Ctrl+Y and the undo buttons undo
+-- and redo it in order with everything else.
+--
+-- The waypoint needs a change Studio tracks, so each step sets an attribute
+-- on the Workspace to "<context token>:<step count>". After any undo or redo
+-- the attribute's value says how many of this context's steps should be
+-- applied, and the steps in between are undone or redone to match. (Changes
+-- to non-archivable instances, CoreGui or the Camera aren't tracked, so the
+-- marker has to live in the place.) The attribute is removed on deactivate.
+
+local UNDO_MARKER = "StudioToolsUndoStep"
+
+-- Applies or reverts steps until `target` of them are applied.
+function ToolContext:_syncUndoSteps()
+	local value = workspace:GetAttribute(UNDO_MARKER)
+	local target = 0
+	if type(value) == "string" then
+		local token, count = string.match(value, "^(.*):(%d+)$")
+		if token == self._undoToken then
+			target = math.min(tonumber(count) or 0, #self._undoSteps)
+		end
+	end
+	while self._undoApplied > target do
+		local step = self._undoSteps[self._undoApplied]
+		self._undoApplied -= 1
+		if step then
+			local ok, err = xpcall(step.undo, debug.traceback)
+			if not ok then
+				warn(string.format("[StudioTools] Tool '%s' undo step '%s' failed:\n%s", self.toolId, step.name, tostring(err)))
+			end
+		end
+	end
+	while self._undoApplied < target do
+		self._undoApplied += 1
+		local step = self._undoSteps[self._undoApplied]
+		if step then
+			local ok, err = xpcall(step.redo, debug.traceback)
+			if not ok then
+				warn(string.format("[StudioTools] Tool '%s' redo step '%s' failed:\n%s", self.toolId, step.name, tostring(err)))
+			end
+		end
+	end
+end
+
+-- Adds a step to Studio's undo history for a change the tool has already
+-- made to its own state. undo() reverts it and redo() makes it again; they
+-- run when the user undoes or redoes while the tool is active, and must not
+-- yield. After the tool deactivates the waypoints stay in the history but do
+-- nothing. Adding a step drops any steps that were undone (like Studio's
+-- redo history).
+function ToolContext:addUndoStep(name: string, undo: () -> (), redo: () -> ())
+	if type(name) ~= "string" or type(undo) ~= "function" or type(redo) ~= "function" then
+		error("ctx:addUndoStep: expected (name: string, undo: function, redo: function)", 2)
+	end
+	if not self._undoSteps then
+		self._undoSteps = {}
+		self._undoApplied = 0
+		self._undoToken = game:GetService("HttpService"):GenerateGUID(false)
+		local function sync()
+			self:_syncUndoSteps()
+		end
+		self:connect(ChangeHistoryService.OnUndo, sync)
+		self:connect(ChangeHistoryService.OnRedo, sync)
+		self:addCleanup(function()
+			-- Not recorded: it's absorbed into the next waypoint, where undoing
+			-- it only puts back an attribute nothing listens to anymore.
+			if workspace:GetAttribute(UNDO_MARKER) ~= nil then
+				workspace:SetAttribute(UNDO_MARKER, nil)
+			end
+		end)
+	end
+	for index = #self._undoSteps, self._undoApplied + 1, -1 do
+		self._undoSteps[index] = nil
+	end
+	table.insert(self._undoSteps, { name = name, undo = undo, redo = redo })
+	self._undoApplied = #self._undoSteps
+
+	local recordingId = ChangeHistoryService:TryBeginRecording(name, name)
+	workspace:SetAttribute(UNDO_MARKER, string.format("%s:%d", self._undoToken, self._undoApplied))
+	if recordingId then
+		ChangeHistoryService:FinishRecording(recordingId, Enum.FinishRecordingOperation.Commit)
+	end
 end
 
 -- System UI ---------------------------------------------------------------
