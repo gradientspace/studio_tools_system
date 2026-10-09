@@ -160,9 +160,12 @@ async function checkLuau(loadedPacks, libs) {
   );
   if (result.error) throw result.error;
 
+  // Windows paths compare case-insensitively (luau-lsp reports "d:\..." for "D:\...").
+  const normalizePath = (p) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
+  const libraryRoot = normalizePath(libraries.CACHE_DIR) + path.sep;
   for (const issue of parseAnalysis(`${result.stdout}\n${result.stderr}`)) {
     // Library code is checked by its own project, not here.
-    if (issue.file && path.resolve(issue.file).startsWith(libraries.CACHE_DIR + path.sep)) continue;
+    if (issue.file && normalizePath(issue.file).startsWith(libraryRoot)) continue;
     const where = issue.file
       ? `${display(issue.file)}:${issue.lineNo}:${issue.col}${issue.instancePath ? ` (${issue.instancePath})` : ""}`
       : "luau-lsp";
