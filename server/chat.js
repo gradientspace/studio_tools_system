@@ -180,9 +180,9 @@ function runTurn(message, allowFreshRetry, request = null) {
   state.agent = agent.id;
   saveState();
 
-  setActivity("Thinking…");
   const thisJob = { handle: null, stopped: false, request };
   job = thisJob;
+  setActivity("Thinking…"); // after setting job, so the update shows it running
   let lastReply = null;
 
   thisJob.handle = agent.run(
@@ -422,6 +422,8 @@ function snapshot(after, conversationId) {
     conversationId: state.conversationId,
     revision,
     running: job !== null,
+    // When the running turn is a tool's request, the tool's name.
+    runningTool: job && job.request ? job.request.source.name : null,
     activity,
     queued: queue.length, // tool requests waiting for the agent
     available: availability.state !== "unavailable",

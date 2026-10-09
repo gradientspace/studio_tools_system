@@ -15,11 +15,16 @@
 	Tools can send prompts too (ctx:askAgent). They show up as user messages
 	labeled with the tool's name, and the status line counts the ones queued.
 
+	While the agent is working, a pulsing orange label sits to the right of
+	the launcher: "Working...", or "Tool called Agent..." when the current
+	turn is a tool's request.
+
 	Drawn in its own ScreenGui in CoreGui. isBlockingInput() keeps viewport
 	clicks on the chat from reaching the active tool.
 ]]
 
 local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 local TextService = game:GetService("TextService")
 local UserInputService = game:GetService("UserInputService")
@@ -37,17 +42,21 @@ local INPUT_VERTICAL_PADDING = 6
 local INPUT_HORIZONTAL_PADDING = 8
 local RETRY_DELAY = 3
 
--- Fixed dark colors: the chat sits on top of the 3D scene.
+-- Fixed dark colors: the chat sits on top of the 3D scene. The shared ones
+-- come from SDK.ViewportStyle, which tools' viewport panels use too.
+local Style = SDK.ViewportStyle
 local COLORS = {
-	panel = Color3.fromRGB(37, 37, 38),
-	field = Color3.fromRGB(24, 24, 25),
+	panel = Style.panel,
+	field = Style.field,
 	userBubble = Color3.fromRGB(52, 58, 70),
-	text = Color3.fromRGB(235, 235, 235),
-	dim = Color3.fromRGB(150, 150, 150),
-	error = Color3.fromRGB(255, 110, 110),
-	send = Color3.fromRGB(0, 122, 204),
+	text = Style.text,
+	dim = Style.dimText,
+	error = Style.errorText,
+	send = Style.accent,
+	working = Color3.fromRGB(230, 126, 34),
+	workingDim = Color3.fromRGB(160, 85, 20), -- the low point of the Working label's pulse
 	stop = Color3.fromRGB(200, 55, 55),
-	button = Color3.fromRGB(70, 70, 72),
+	button = Style.button,
 }
 
 local ChatPanel = {}
@@ -121,6 +130,7 @@ function ChatPanel.new(host: any)
 	self._messages = {}
 	self._running = false
 	self._activity = ""
+	self._runningTool = nil :: string? -- name of the tool whose request the agent is working on
 	self._queued = 0 -- tool requests waiting for the agent
 	self._unavailableReason = nil :: string? -- set while the server says the agent can't run
 	self._problem = nil :: string? -- connection or request problem to show
@@ -157,11 +167,25 @@ function ChatPanel:_build()
 	})
 	self.gui = self._maid:add(gui)
 
-	-- Launcher -----------------------------------------------------------
-	local launcher = create("TextButton", {
-		Name = "Launcher",
+	-- Launcher, and the "Working..." badge to its right ---------------------
+	local launcherRow = create("Frame", {
+		Name = "LauncherRow",
 		AnchorPoint = Vector2.new(0, 1),
 		Position = UDim2.new(0, MARGIN, 1, -MARGIN),
+		Size = UDim2.fromOffset(0, LAUNCHER_HEIGHT),
+		AutomaticSize = Enum.AutomaticSize.X,
+		BackgroundTransparency = 1,
+		Parent = gui,
+	}, {
+		create("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Padding = UDim.new(0, 6),
+		}),
+	})
+	local launcher = create("TextButton", {
+		Name = "Launcher",
+		LayoutOrder = 1,
 		Size = UDim2.fromOffset(0, LAUNCHER_HEIGHT),
 		AutomaticSize = Enum.AutomaticSize.X,
 		AutoButtonColor = true,
@@ -171,13 +195,36 @@ function ChatPanel:_build()
 		TextSize = 15,
 		TextColor3 = COLORS.text,
 		Text = "Tools Agent",
-		Parent = gui,
+		Parent = launcherRow,
 	}, { corner(6), padding(12, 0) })
 	self.launcher = launcher
 	self:_trackHover(launcher)
 	launcher.Activated:Connect(function()
 		self:_setOpen(not self._ui.open)
 	end)
+
+	-- Shown while the agent is working; pulses. Just a label, not clickable.
+	local working = create("TextLabel", {
+		Name = "Working",
+		LayoutOrder = 2,
+		Visible = false,
+		Size = UDim2.fromOffset(0, LAUNCHER_HEIGHT),
+		AutomaticSize = Enum.AutomaticSize.X,
+		BackgroundColor3 = COLORS.working,
+		BorderSizePixel = 0,
+		Font = Enum.Font.SourceSansBold,
+		TextSize = 15,
+		TextColor3 = Color3.new(1, 1, 1),
+		Text = "Working...",
+		Parent = launcherRow,
+	}, { corner(6), padding(12, 0) })
+	self.working = working
+	self:_trackHover(working)
+	self._workingPulse = self._maid:add(TweenService:Create(
+		working,
+		TweenInfo.new(0.7, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+		{ BackgroundColor3 = COLORS.workingDim }
+	))
 
 	-- Panel ----------------------------------------------------------------
 	local panel = create("Frame", {
@@ -534,7 +581,17 @@ function ChatPanel:_update()
 	self.sendButton.BackgroundColor3 = if self._running then COLORS.stop elseif unavailable then COLORS.button else COLORS.send
 	self.sendButton.AutoButtonColor = not unavailable
 	self.sendButton.TextColor3 = if unavailable then COLORS.dim else Color3.new(1, 1, 1)
-	self.launcher.Text = if self._running then "Tools Agent …" else "Tools Agent"
+	self.launcher.Text = "Tools Agent"
+	self.working.Text = if self._runningTool then "Tool called Agent..." else "Working..."
+	if self._running ~= self.working.Visible then
+		self.working.Visible = self._running
+		if self._running then
+			self._workingPulse:Play()
+		else
+			self._workingPulse:Cancel()
+			self.working.BackgroundColor3 = COLORS.working
+		end
+	end
 end
 
 function ChatPanel:_setOpen(open: boolean)
@@ -599,6 +656,7 @@ function ChatPanel:_apply(data: any)
 	self._revision = data.revision or self._revision
 	self._running = data.running == true
 	self._activity = data.activity or ""
+	self._runningTool = if self._running and type(data.runningTool) == "string" then data.runningTool else nil
 	self._queued = if type(data.queued) == "number" then data.queued else 0
 	-- Older servers don't send `available`; treat that as available.
 	self._unavailableReason = if data.available == false
@@ -641,7 +699,9 @@ function ChatPanel:isBlockingInput(): boolean
 		return true
 	end
 	local mouse = self.host.plugin:GetMouse()
-	return contains(self.launcher, mouse.X, mouse.Y) or (self._ui.open and contains(self.panel, mouse.X, mouse.Y))
+	return contains(self.launcher, mouse.X, mouse.Y)
+		or contains(self.working, mouse.X, mouse.Y)
+		or (self._ui.open and contains(self.panel, mouse.X, mouse.Y))
 end
 
 function ChatPanel:destroy()
