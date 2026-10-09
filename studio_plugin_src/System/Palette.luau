@@ -13,6 +13,7 @@ local SDK = require(script.Parent.Parent.SDK)
 local Theme = require(script.Parent.Theme)
 
 local SELECTED_TAB_SETTING = "StudioToolsSystem.SelectedTab"
+local DROPDOWN_MAX_HEIGHT = 240
 
 local DEFAULT_COLOR_PRESETS = {
 	Color3.fromRGB(242, 243, 243),
@@ -66,7 +67,7 @@ local function label(text: string, props: { [string]: any }?): TextLabel
 	return create("TextLabel", base)
 end
 
-local function button(text: string, selected: boolean?, props: { [string]: any }?): TextButton
+local function button(text: string, selected: boolean?, props: { [string]: any }?, children: { Instance }?): TextButton
 	local base = {
 		AutoButtonColor = true,
 		BorderSizePixel = 1,
@@ -83,7 +84,7 @@ local function button(text: string, selected: boolean?, props: { [string]: any }
 			base[key] = value
 		end
 	end
-	return create("TextButton", base)
+	return create("TextButton", base, children)
 end
 
 local function textBox(text: string, props: { [string]: any }?): TextBox
@@ -104,6 +105,26 @@ local function textBox(text: string, props: { [string]: any }?): TextBox
 		end
 	end
 	return create("TextBox", base)
+end
+
+-- A small downward chevron (10x5) drawn from two rotated bars, since the
+-- Studio UI fonts have no arrow glyphs.
+local function chevron(color: Color3, props: { [string]: any }): Frame
+	local base = { BackgroundTransparency = 1, Size = UDim2.fromOffset(10, 5) }
+	for key, value in props do
+		base[key] = value
+	end
+	local function bar(x: number, rotation: number): Frame
+		return create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromOffset(x, 2.5),
+			Size = UDim2.fromOffset(7.5, 1.5),
+			Rotation = rotation,
+			BackgroundColor3 = color,
+			BorderSizePixel = 0,
+		})
+	end
+	return create("Frame", base, { bar(2.5, 45), bar(7.5, -45) })
 end
 
 local function listLayout(padding: number): UIListLayout
@@ -150,6 +171,7 @@ function Palette.new(host: any, manager: any)
 end
 
 function Palette:render()
+	self:_closeDropdown()
 	if self._content then
 		self._content:Destroy()
 	end
@@ -384,11 +406,20 @@ function Palette:_settingRow(entry: any, schema: any, value: any): Frame
 			set(not value)
 		end)
 	elseif kind == "enum" then
-		local options = schema.options or {}
-		local cycle = button(tostring(value) .. "  ▸", false, { Parent = editorFrame })
-		cycle.Activated:Connect(function()
-			local index = table.find(options, value) or 0
-			set(options[index % #options + 1])
+		local field = button(tostring(value), false, {
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Parent = editorFrame,
+		}, {
+			create("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 18) }),
+		})
+		chevron(Theme.color("DimmedText"), {
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, 13, 0.5, 0),
+			Parent = field,
+		})
+		field.Activated:Connect(function()
+			self:_openDropdown(field, schema.options or {}, value, set)
 		end)
 	elseif kind == "color" then
 		row.AutomaticSize = Enum.AutomaticSize.Y
@@ -460,7 +491,130 @@ function Palette:_settingRow(entry: any, schema: any, value: any): Frame
 	return row
 end
 
+-- Dropdown (enum settings) ----------------------------------------------------
+-- The list floats in a layer over the whole palette, below the field (or
+-- above it, if there's more room there). Picking an option, clicking
+-- outside the list, scrolling the palette, resizing it or re-rendering it
+-- closes the list.
+
+function Palette:_openDropdown(anchor: GuiObject, options: { any }, current: any, onPick: (any) -> ())
+	self:_closeDropdown()
+	if #options == 0 then
+		return
+	end
+	local container: GuiObject = self.host.container
+	local dropdown = {}
+	self._dropdown = dropdown
+
+	local layer = create("TextButton", {
+		Name = "Dropdown",
+		Text = "",
+		AutoButtonColor = false,
+		BackgroundTransparency = 1,
+		Size = UDim2.fromScale(1, 1),
+		ZIndex = 10,
+	})
+	dropdown.layer = layer
+	layer.Activated:Connect(function()
+		self:_closeDropdown()
+	end)
+
+	-- Place it under the anchor, flipping above when that has more room.
+	local itemHeight = Theme.ROW_HEIGHT - 2
+	local wanted = #options * itemHeight + 2
+	local anchorTop = anchor.AbsolutePosition.Y - container.AbsolutePosition.Y
+	local below = container.AbsoluteSize.Y - (anchorTop + anchor.AbsoluteSize.Y)
+	local above = anchorTop
+	local height, top
+	if wanted <= below or below >= above then
+		height = math.min(wanted, DROPDOWN_MAX_HEIGHT, below)
+		top = anchorTop + anchor.AbsoluteSize.Y
+	else
+		height = math.min(wanted, DROPDOWN_MAX_HEIGHT, above)
+		top = anchorTop - height
+	end
+
+	local list = create("ScrollingFrame", {
+		Name = "List",
+		Position = UDim2.fromOffset(anchor.AbsolutePosition.X - container.AbsolutePosition.X, top),
+		Size = UDim2.fromOffset(anchor.AbsoluteSize.X, height),
+		BackgroundColor3 = Theme.color("MainBackground"),
+		BorderSizePixel = 1,
+		BorderColor3 = Theme.color("Border"),
+		CanvasSize = UDim2.fromOffset(0, #options * itemHeight),
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		ScrollBarThickness = 4,
+		ScrollBarImageColor3 = Theme.color("ScrollBar"),
+		Parent = layer,
+	}, { listLayout(0) })
+
+	for index, option in options do
+		local selected = option == current
+		local function background(hovered: boolean): Color3
+			return Theme.color("Item", if selected then "Selected" elseif hovered then "Hover" else "Default")
+		end
+		local item = create("TextButton", {
+			Name = tostring(option),
+			LayoutOrder = index,
+			AutoButtonColor = false,
+			BorderSizePixel = 0,
+			BackgroundColor3 = background(false),
+			Size = UDim2.new(1, 0, 0, itemHeight),
+			Font = Theme.FONT,
+			TextSize = Theme.TEXT_SIZE,
+			TextColor3 = Theme.color("MainText", if selected then "Selected" else "Default"),
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Text = tostring(option),
+			Parent = list,
+		}, {
+			create("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6) }),
+		})
+		item.MouseEnter:Connect(function()
+			item.BackgroundColor3 = background(true)
+		end)
+		item.MouseLeave:Connect(function()
+			item.BackgroundColor3 = background(false)
+		end)
+		item.Activated:Connect(function()
+			self:_closeDropdown()
+			if not selected then
+				onPick(option)
+			end
+		end)
+	end
+
+	-- Scroll the current option into view.
+	local currentIndex = table.find(options, current)
+	if currentIndex then
+		local y = (currentIndex - 1) * itemHeight - (height - itemHeight) / 2
+		list.CanvasPosition = Vector2.new(0, math.clamp(y, 0, math.max(0, #options * itemHeight - height)))
+	end
+
+	local function close()
+		self:_closeDropdown()
+	end
+	dropdown.connections = {
+		self.scroll:GetPropertyChangedSignal("CanvasPosition"):Connect(close),
+		container:GetPropertyChangedSignal("AbsoluteSize"):Connect(close),
+	}
+	layer.Parent = container
+end
+
+function Palette:_closeDropdown()
+	local dropdown = self._dropdown
+	if not dropdown then
+		return
+	end
+	self._dropdown = nil
+	for _, connection in dropdown.connections or {} do
+		connection:Disconnect()
+	end
+	dropdown.layer:Destroy()
+end
+
 function Palette:destroy()
+	self:_closeDropdown()
 	self._maid:clean()
 	self._content = nil
 end
