@@ -92,8 +92,8 @@ local toolbar = plugin:CreateToolbar("GSToolAgent")
 local paletteButton = toolbar:CreateButton(
 	"StudioToolsPalette",
 	"Show or hide the GSToolAgent palette",
-	"", -- TODO: icon asset id
-	"GS-STS"
+	"rbxassetid://128213650030664", -- studio_plugin/icon.png, uploaded as an image asset
+	"GSToolAgent"
 )
 paletteButton.ClickableWhenViewportHidden = true
 
