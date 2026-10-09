@@ -17,14 +17,15 @@ local CoreGui = game:GetService("CoreGui")
 
 local SDK = require(script.Parent.Parent.SDK)
 
-local BUTTON_HEIGHT = 24
+local BUTTON_HEIGHT = 30
 local BUTTON_MIN_WIDTH = 96
+local BUTTON_TEXT_SIZE = 20
 local BOTTOM_MARGIN = 12
 
 -- Fixed colors rather than Studio theme colors: the overlay sits on top of
 -- the 3D scene, which looks the same in light and dark themes.
 local GREEN = Color3.fromRGB(46, 160, 67)
-local RED = Color3.fromRGB(200, 55, 55)
+local RED = Color3.fromRGB(215, 25, 25)
 local BLUE = Color3.fromRGB(0, 122, 204)
 local GRAY = Color3.fromRGB(110, 110, 110)
 local PANEL = Color3.fromRGB(37, 37, 38)
@@ -69,7 +70,7 @@ local function makeButton(text: string, color: Color3): (TextButton, (boolean, C
 	button.Size = UDim2.fromOffset(BUTTON_MIN_WIDTH, BUTTON_HEIGHT)
 	button.AutomaticSize = Enum.AutomaticSize.X
 	button.Font = Enum.Font.SourceSansBold
-	button.TextSize = 16
+	button.TextSize = BUTTON_TEXT_SIZE
 	button.Text = text
 	addPadding(button, 16, 0)
 	addCorner(button, 6)
