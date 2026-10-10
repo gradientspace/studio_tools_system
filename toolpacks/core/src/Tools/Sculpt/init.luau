@@ -1,11 +1,12 @@
 --[[
 	Sculpt: brush-based sculpting of a MeshPart's mesh.
 
-	Starting the tool needs exactly one MeshPart selected (canActivate). The
-	part's mesh is read into a SculptMesh (geometry3luau DMesh3 + AABB tree,
-	see SculptMesh.luau), and shown by a PreviewMesh (an EditableMesh-backed
-	MeshPart in a temporary model) in place of the source part, which is
-	hidden with LocalTransparencyModifier (a local, unsaved property).
+	Starting the tool needs exactly one MeshPart selected (canActivate). An
+	editable copy of the part's mesh is read into a SculptMesh (geometry3luau
+	DMesh3 + AABB tree, see SculptSource.luau and SculptMesh.luau), and shown
+	by a PreviewMesh (an EditableMesh-backed MeshPart in a temporary model)
+	in place of the source part, which is hidden with
+	LocalTransparencyModifier (a local, unsaved property).
 
 	Strokes: a press on the mesh starts one, and dabs are placed along the
 	mouse path every `spacing` x radius. Dabs find their vertices on the
@@ -16,8 +17,13 @@
 	[ / ] change the size. Each stroke is one undo step (ctx:addUndoStep)
 	holding only the moved vertices' deltas, so Ctrl+Z / Ctrl+Y work.
 
-	Nothing is written back to the MeshPart yet: exiting discards the sculpt
-	(the tool asks first if there are changes).
+	An Accept/Cancel tool. Accept writes the sculpt into the editable copy,
+	which the part then shows (MeshPart:ApplyMesh, in place, one undo step;
+	see SculptSource.luau). Studio doesn't save EditableMesh content with the
+	place, so the part becomes a local mesh (ctx:saveLocalMesh): stored on
+	the dev server and restored when the place is opened again. Sculpting it
+	again starts from that mesh; Save As MeshPart uploads it as an asset.
+	Cancel discards the sculpt (the tool asks first if there are changes).
 ]]
 
 local Selection = game:GetService("Selection")
@@ -25,6 +31,7 @@ local UserInputService = game:GetService("UserInputService")
 
 local SDK = require(script.Parent.Parent.SDK)
 local SculptMesh = require(script.SculptMesh)
+local SculptSource = require(script.SculptSource)
 local Brushes = require(script.Brushes)
 local PreviewMesh = require(script.PreviewMesh)
 local BrushCursor = require(script.BrushCursor)
@@ -53,10 +60,17 @@ local Sculpt = SDK.Tool:extend({
 	id = "Sculpt",
 	name = "Sculpt",
 	version = "0.1.0",
-	description = "Sculpt the selected MeshPart with brushes: clay, draw, flatten, smooth, inflate, pinch, crease and grab. Ctrl inverts, Shift smooths, [ and ] resize. The result isn't saved to the MeshPart yet.",
+	description = "Sculpt the selected MeshPart with brushes: clay, draw, flatten, smooth, inflate, pinch, crease and grab. Ctrl inverts, Shift smooths, [ and ] resize. Apply writes the sculpt into the part, as a local mesh.",
 	tab = "Model",
 	section = "Sculpt",
-	shutdown = { type = SDK.ShutdownType.Done, done = { tooltip = "Exit Sculpt; the sculpted mesh is discarded (Esc)" } },
+	shutdown = {
+		type = SDK.ShutdownType.AcceptCancel,
+		accept = {
+			text = "Apply",
+			tooltip = "Write the sculpt into the MeshPart (one undo step). It becomes a local mesh, kept by the dev server until it's uploaded with Save As MeshPart.",
+		},
+		cancel = { tooltip = "Exit and discard the sculpt (Esc)" },
+	},
 	settings = {
 		{
 			key = "brush",
@@ -192,6 +206,9 @@ end
 
 function Sculpt:activate(ctx: SDK.ToolContext)
 	self.closed = false
+	self.loading = true
+	self.source = nil
+	self.built = nil
 	self.sm = nil
 	self.preview = nil
 	self.stroke = nil
@@ -274,17 +291,81 @@ function Sculpt:activate(ctx: SDK.ToolContext)
 	end)
 end
 
-function Sculpt:deactivate(_ctx: SDK.ToolContext, _reason: SDK.ShutdownReason)
+function Sculpt:deactivate(ctx: SDK.ToolContext, reason: SDK.ShutdownReason)
 	self.closed = true
 	self.stroke = nil
+	local built = self.built
+	self.built = nil
+	if reason ~= SDK.ShutdownReason.Accept or not built then
+		if built then
+			built:Destroy()
+		end
+		return
+	end
+
+	local source = self.source
+	local part: MeshPart = self.part
+	local ok, err = ctx:recordUndo("Sculpt", function()
+		source:apply(built)
+		-- the part now shows an EditableMesh: store it so it survives saving the place
+		ctx:saveLocalMesh(part)
+	end)
+	built:Destroy()
+	if not ok then
+		-- recordUndo reverted the place; the editable copy isn't in use
+		source.applied = false
+		warn("[Sculpt] The sculpt wasn't applied: " .. tostring(err))
+		return
+	end
+	ctx:log(string.format("applied the sculpt to %s", part.Name))
 end
 
-function Sculpt:confirmShutdown(_reason: SDK.ShutdownReason, _trigger: SDK.ShutdownTrigger): boolean
-	if self.applied > 0 then
-		return self.ctx:confirm({
+function Sculpt:canAccept(): (boolean, string?)
+	if self.loading then
+		return false, "Loading the mesh..."
+	elseif not self.sm then
+		return false, "The mesh couldn't be loaded"
+	elseif not self.part.Parent then
+		return false, "The MeshPart was removed"
+	elseif self.applied == 0 then
+		return false, "Nothing sculpted yet"
+	end
+	return true, nil
+end
+
+-- Accept builds the new mesh first (this yields), so deactivate() can apply
+-- it in one step. If building fails, nothing changes and the tool stays
+-- open. Cancel asks before throwing strokes away.
+function Sculpt:confirmShutdown(reason: SDK.ShutdownReason, _trigger: SDK.ShutdownTrigger): boolean
+	local ctx: SDK.ToolContext = self.ctx
+	if reason == SDK.ShutdownReason.Accept then
+		self:_endStroke()
+		local part: MeshPart = self.part
+		local started = os.clock()
+		local progress = ctx:showProgress({ title = "Sculpt", message = string.format("Applying the sculpt to %s...", part.Name) })
+		local ok, result = pcall(self.source.build, self.source)
+		progress:close()
+		if self.closed then
+			if ok then
+				result:Destroy()
+			end
+			return false
+		end
+		if not ok then
+			local message = string.format("Couldn't apply the sculpt to %s: %s", part.Name, (tostring(result):gsub("^.-:%d+: ", "")))
+			ctx:setStatus(message)
+			ctx:alert({ title = "Sculpt failed", message = message .. "\n\nNothing was changed." })
+			return false
+		end
+		ctx:log(string.format("built the sculpted mesh in %.2fs", os.clock() - started))
+		self.built = result
+		return true
+	end
+	if reason == SDK.ShutdownReason.Cancel and self.applied > 0 then
+		return ctx:confirm({
 			title = "Discard the sculpt?",
-			message = "Saving the sculpted mesh back to the MeshPart isn't supported yet, so exiting discards your changes.",
-			confirmText = "Exit",
+			message = "Your strokes haven't been applied to the MeshPart. Use Apply to keep them.",
+			confirmText = "Discard",
 			cancelText = "Keep Sculpting",
 		})
 	end
@@ -295,11 +376,13 @@ function Sculpt:onAction(key: string)
 	if key == "reset" and self.sm and not self.stroke then
 		local record = self.sm:resetRecord()
 		if record then
-			self:_applyRecord(record, 1)
+			-- after a reset no strokes are applied; undoing it brings the count back
+			local before = self.applied
+			self:_applyRecord(record, 1, 0)
 			self.ctx:addUndoStep("Sculpt: Reset", function()
-				self:_applyRecord(record, -1)
+				self:_applyRecord(record, -1, before)
 			end, function()
-				self:_applyRecord(record, 1)
+				self:_applyRecord(record, 1, 0)
 			end)
 		end
 	end
@@ -312,14 +395,24 @@ function Sculpt:_load()
 	local part: MeshPart = self.part
 	local started = os.clock()
 
-	local ok, sm = pcall(SculptMesh.fromMeshPart, part)
+	local ok, source = pcall(SculptSource.load, part)
 	if self.closed then
+		if ok then
+			source:destroy()
+		end
 		return
 	end
 	if not ok then
-		ctx:setStatus(string.format("Couldn't read the mesh of %s: %s", part.Name, tostring(sm)))
+		self.loading = false
+		ctx:setStatus(string.format("Couldn't read the mesh of %s: %s", part.Name, tostring(source)))
+		ctx:refreshShutdownButtons()
 		return
 	end
+	-- freed when the tool exits, unless the part shows it by then
+	ctx:addCleanup(function()
+		source:destroy()
+	end)
+	local sm = source.sm
 
 	-- Objects made after the tool closed (the preview build yields) are
 	-- destroyed right away instead of being handed to a finished context.
@@ -336,13 +429,18 @@ function Sculpt:_load()
 		return
 	end
 	if not built then
+		self.loading = false
 		ctx:setStatus(string.format("Couldn't build the preview of %s: %s", part.Name, tostring(preview)))
+		ctx:refreshShutdownButtons()
 		return
 	end
 
+	self.loading = false
+	self.source = source
 	self.sm = sm
 	self.preview = preview
 	self:_hideSource()
+	ctx:autoCameraSpeed(sm.size)
 	ctx:connect(part:GetPropertyChangedSignal("CFrame"), function()
 		preview:updatePlacement()
 	end)
@@ -354,6 +452,7 @@ function Sculpt:_load()
 	ctx:setStatus(status)
 	ctx:log(string.format("loaded %s in %.2fs", status, os.clock() - started))
 	ctx:refreshInput()
+	ctx:refreshShutdownButtons()
 end
 
 -- Clears the selection so Studio doesn't draw its selection box around the
@@ -712,6 +811,7 @@ function Sculpt:_endStroke()
 	end
 	self:_finishChange(moved, count)
 	self.applied += 1
+	self.ctx:refreshShutdownButtons()
 	self.ctx:addUndoStep("Sculpt: " .. stroke.name, function()
 		self:_applyRecord(record, -1)
 	end, function()
@@ -744,16 +844,18 @@ function Sculpt:_finishChange(moved: { number }, count: number)
 	sm:refitTree()
 end
 
--- Applies an undo record forward (1) or backward (-1).
-function Sculpt:_applyRecord(record: SculptMesh.Record, sign: number)
+-- Applies an undo record forward (1) or backward (-1). `applied` sets the
+-- count of applied strokes (default: one more or one fewer).
+function Sculpt:_applyRecord(record: SculptMesh.Record, sign: number, applied: number?)
 	if self.closed or not self.sm then
 		return
 	end
 	local moved, count = self.sm:applyRecord(record, sign)
 	self.preview:setPositions(moved, count)
 	self:_finishChange(moved, count)
-	self.applied += sign
+	self.applied = applied or (self.applied + sign)
 	self.ctx:refreshInput()
+	self.ctx:refreshShutdownButtons()
 end
 
 return Sculpt

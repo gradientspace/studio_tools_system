@@ -39,14 +39,20 @@ SculptMesh.__index = SculptMesh
 -- A stroke's undo record: flat { v, dx, dy, dz, v, dx, dy, dz, ... }.
 export type Record = { number }
 
--- Reads a MeshPart into a SculptMesh. Yields (the engine loads the mesh
--- asset). Errors if the mesh can't be read or has no triangles.
-function SculptMesh.fromMeshPart(part: MeshPart)
-	local mesh, info = RobloxMesh.FromMeshPart(part, {
-		space = "local",
+-- Reads a MeshPart's mesh (an EditableMesh) into a SculptMesh in part-local
+-- space: mesh vertex m goes to scale * (m - center). vertexMap maps each
+-- editable vertex id to the SculptMesh vertex it was welded into. Errors if
+-- the mesh has no triangles.
+function SculptMesh.fromEditable(editable: EditableMesh, scale: Vector3, center: Vector3)
+	local sx, sy, sz = scale.X, scale.Y, scale.Z
+	local cx, cy, cz = center.X, center.Y, center.Z
+	local mesh, info = RobloxMesh.FromEditableMesh(editable, {
 		weld = "positions", -- join vertices split at UV/normal seams, so seams don't tear
 		normals = "none",
 		uvs = "triangle",
+		transform = function(x: number, y: number, z: number): (number, number, number)
+			return (x - cx) * sx, (y - cy) * sy, (z - cz) * sz
+		end,
 	})
 	if mesh:TriangleCount() == 0 then
 		error("the mesh has no triangles", 0)
@@ -54,6 +60,7 @@ function SculptMesh.fromMeshPart(part: MeshPart)
 	local self = setmetatable({}, SculptMesh)
 	self:_init(mesh)
 	self.failedTriangles = info and info.failed or 0
+	self.vertexMap = info and info.vertexMap or {}
 	return self
 end
 
