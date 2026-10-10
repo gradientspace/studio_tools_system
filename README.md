@@ -80,6 +80,15 @@ Libraries are pinned in `libraries.json` to a GitHub release asset: a `.rbxmx` m
 
 State that should survive a hot reload can be kept in `host.persist` (a plain table owned by the loader). Tool settings are persisted with `plugin:SetSetting` and survive Studio restarts.
 
+## Local meshes
+
+Studio doesn't save EditableMesh content with the place: a MeshPart showing an EditableMesh (e.g. one made by Bake Transform or Sculpt) is saved with an empty mesh. To keep such parts, tools make them **local meshes** with `ctx:saveLocalMesh(part)`. The part gets a mesh id (attribute `StudioToolsLocalMeshId`, tag `StudioToolsLocalMesh`), and the mesh is uploaded to the dev server, which stores it in `local_meshes/place-<placeId>/<id>.lmesh` (gitignored; set `LOCAL_MESH_DIR` in `.env` to keep it elsewhere). When the place is opened, or a tagged part with an empty mesh is pasted or inserted, the plugin downloads the mesh and puts it back.
+
+- Saving a part again overwrites its stored mesh, as long as the id still belongs to the same EditableMesh. A part whose id belongs to a different mesh (a tool replaced it with a copy, or a duplicate was edited) gets a new id, so the original, which undo can bring back, keeps its stored mesh. Old meshes are never deleted automatically.
+- The meshes live on this computer only: someone else opening the place (or Team Create) sees empty meshes. To make a mesh part of the place for good, upload it with Save As MeshPart.
+- Restoring is its own undo step ("Load local meshes"), cleared from the history right after the place is opened.
+- While the place has local meshes, a dark orange "N Local Meshes" chip shows in the bottom-right corner of the viewport. Its menu (the dots on its right) has **Show Boxes**, which outlines every local mesh, and **Save All As MeshParts**, which uploads each one as a Mesh asset and gives its parts the uploaded mesh (one undo step; not while a tool is active).
+
 ## Tools Agent chat in Studio
 
 The **Tools Agent** button at the bottom-left of the viewport opens a chat box connected to a headless coding agent that the dev server runs in this repo. The agent is [Claude Code](https://claude.com/claude-code) by default, or Codex; Studio doesn't know or care which. Type a request ("make Place Block's default size 8") and press Enter.
@@ -182,17 +191,23 @@ Tools can extend other tool classes (`Base:extend({...})`, overriding methods an
 | `ctx:createAdornment(className)` | Any `HandleAdornment` (`"LineHandleAdornment"`, `"SphereHandleAdornment"`, ...) in world space (CoreGui; never saved, no undo) |
 | `ctx:focusView(cframe, size)` | Animate the camera to frame a box, keeping the view direction; the box center becomes the orbit point |
 | `ctx:centerView(point)` | Animate a pan (no rotation or zoom) that puts a world point at the view center; it becomes the orbit point |
+| `ctx:autoCameraSpeed(size)` | Set Studio's camera fly/wheel speeds to suit an object of this size; the user's speeds are restored when the tool exits |
 | `ctx:createTemporaryModel(name?)` | A non-archivable `Model` in the Workspace for temporary 3D content (never saved, copied or in undo history; parts locked and ignored by `raycastAt`) |
 | `ctx:recordUndo(name, fn, ...)` | Run `fn` as one undo waypoint (cancelled if it errors) |
 | `ctx:beginUndo(name)` | Open a waypoint across multiple events; returns `{ commit, cancel }` |
 | `ctx:addUndoStep(name, undo, redo)` | A Studio undo waypoint for a change to the tool's own state (not the place); Ctrl+Z/Ctrl+Y call `undo`/`redo` while the tool is active |
 | `ctx:confirm({ title?, message, confirmText?, cancelText? })` | Modal confirmation dialog in the viewport; yields, returns true/false |
+| `ctx:alert({ title?, message, buttonText? })` | Modal message (e.g. an error) with one button; yields until dismissed |
+| `ctx:showProgress({ title?, message })` | Modal progress dialog while the tool works (e.g. an upload on Accept); returns a handle with `:setMessage(text)` and `:close()` |
 | `ctx:refreshShutdownButtons()` | Re-query `canAccept()` now (Accept/Cancel tools) |
 | `ctx:setStatus(text?)` | Status line under the tool's name in the palette (nil hides it) |
 | `ctx:setSettingState(key, { visible?, enabled?, label?, tooltip? })` | Show/hide, enable/disable, relabel or change the tooltip of one setting's widget (any type, including `"button"` actions, which call the tool's `onAction(key)`) |
 | `ctx:createViewportPanel({ position? }?)` | A system-styled Frame in the viewport (`"Top"`, `"TopLeft"`, `"TopRight"`) for UI that doesn't fit the settings panel; clicks on it don't reach the tool. Style its contents with `SDK.ViewportStyle` |
 | `ctx:askAgent(prompt, { cancelOnDeactivate? }?)` | Send a prompt to the Tools Agent, which can edit the place through the Roblox Studio MCP. Returns an `AgentRequest` right away: `:await()` (yields), `:onFinished(fn)`, `:cancel()`, `.status`. See "Tools Agent requests" in docs/TOOLPACKS.md |
 | `ctx:connect(signal, fn)`, `ctx:addCleanup(task)` | Auto-cleaned on deactivate |
+| `ctx:saveLocalMesh(part)` | Store an EditableMesh-backed MeshPart's mesh on the dev server so it survives saving the place (see Local meshes); call inside the undo recording that made the part. Returns its mesh id |
+| `ctx:clearLocalMesh(part)` | Stop treating a part as a local mesh (e.g. it now uses an uploaded asset) |
+| `ctx:uploadMesh(part, { name, description?, onStatus? })` | Upload a MeshPart's mesh as a new Mesh asset and load it back as an unparented MeshPart for `ApplyMesh` (yields; needs the Studio beta "CreateAssetAsync Luau API") |
 | `ctx:log(...)` | Prefixed print |
 
 ## Core pack tools
@@ -201,4 +216,6 @@ Tools can extend other tool classes (`Base:extend({...})`, overriding methods an
 - **Paint** — click or drag across parts to recolor them (optionally set material). An Accept/Cancel tool: Accept is disabled until something is painted, and Cancel asks for confirmation and then reverts the whole session.
 - **QuickMove** — drag a part to slide it in XZ; hold Shift to move it vertically. Optional snap increment.
 - **Erase** — click to delete; by default only blocks created by Place Block.
-- **Sculpt** (Model tab) — brush sculpting of the selected MeshPart: Clay, Draw, Flatten, Smooth, Inflate, Pinch, Crease and Grab brushes, with strength, screen- or world-space size, falloff curves, spacing, X/Y/Z mirroring and front-faces-only. Ctrl/Cmd inverts, Shift smooths, `[` / `]` resize, F frames the mesh and Shift+F the brush area, C centers the view on the point under the cursor, and every stroke is a Studio undo step. Shown textured, untextured or flat shaded. The result isn't written back to the MeshPart yet.
+- **Sculpt** (Model tab) — brush sculpting of the selected MeshPart: Clay, Draw, Flatten, Smooth, Inflate, Pinch, Crease and Grab brushes, with strength, screen- or world-space size, falloff curves, spacing, X/Y/Z mirroring and front-faces-only. Ctrl/Cmd inverts, Shift smooths, `[` / `]` resize, F frames the mesh and Shift+F the brush area, C centers the view on the point under the cursor, and every stroke is a Studio undo step. Shown textured, untextured or flat shaded. An Accept/Cancel tool: Apply writes the sculpt into the part in place (one undo step; the part keeps its pivot, attachments and welds, and is moved and resized only as much as its new bounds need), making it a local mesh that can be sculpted again, until Save As MeshPart uploads it.
+- **Bake Transform** (Model tab) — bakes the rotation and/or scale of the selected MeshParts into their meshes, and optionally moves their pivots to the center or base. Shows each part's new bounding box and pivot while active; Bake replaces each part with a copy using the baked mesh (an EditableMesh) in one undo step, keeping properties and children and repointing welds and constraints. Meshes the user can't edit are skipped.
+- **Save As MeshPart** (Model tab) — uploads the selected MeshPart's mesh as a new Mesh asset in your inventory (e.g. to make a baked, in-memory EditableMesh permanent), then either gives the part the uploaded mesh (Replace Input) or adds a copy that uses it. Errors are shown in a dialog.

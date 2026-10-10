@@ -23,6 +23,8 @@ local UserInputService = game:GetService("UserInputService")
 local SDK = require(script.Parent.Parent.SDK)
 local AgentRequests = require(script.Parent.AgentRequests)
 local CameraMotion = require(script.Parent.CameraMotion)
+local CameraSpeed = require(script.Parent.CameraSpeed)
+local MeshUpload = require(script.Parent.MeshUpload)
 local Maid = SDK.Maid
 local Signal = SDK.Signal
 
@@ -48,6 +50,10 @@ function ToolContext.new(host: any, entry: any, settings: { [string]: any }, opt
 	self._raycastExclude = {} :: { Instance }
 	options = options or {}
 	self._confirm = options.confirm
+	self._alert = options.alert
+	self._showProgress = options.showProgress
+	self._saveLocalMesh = options.saveLocalMesh
+	self._clearLocalMesh = options.clearLocalMesh
 	self._refreshShutdownButtons = options.refreshShutdownButtons
 	self._inputBehaviorsChanged = options.inputBehaviorsChanged
 	self._refreshInput = options.refreshInput
@@ -60,6 +66,10 @@ function ToolContext.new(host: any, entry: any, settings: { [string]: any }, opt
 	self._undoSteps = nil :: { { name: string, undo: () -> (), redo: () -> () } }? -- from addUndoStep
 	self._undoApplied = 0 -- how many of _undoSteps are currently applied
 	self._undoToken = nil :: string?
+	-- The user's camera speeds when the tool started, restored on deactivate
+	-- if autoCameraSpeed changed them.
+	self._cameraSpeeds = CameraSpeed.snapshot()
+	self._cameraSpeedChanged = false
 	return self
 end
 
@@ -301,6 +311,22 @@ function ToolContext:focusView(cframe: CFrame, size: Vector3)
 	CameraMotion.frame(cframe, size)
 end
 
+-- Sets Studio's camera fly and mouse-wheel speeds to suit an object of this
+-- size (e.g. the bounds of what the tool edits). They're user preferences,
+-- so the values from when the tool started come back when it deactivates.
+function ToolContext:autoCameraSpeed(size: Vector3)
+	if typeof(size) ~= "Vector3" then
+		error("ctx:autoCameraSpeed: expected (size: Vector3)", 2)
+	end
+	if not self._cameraSpeedChanged then
+		self._cameraSpeedChanged = true
+		self:addCleanup(function()
+			CameraSpeed.restore(self.plugin, self._cameraSpeeds)
+		end)
+	end
+	CameraSpeed.apply(self.plugin, self._cameraSpeeds, size)
+end
+
 -- Pans the camera (no rotation, no zoom) so that a world point is at the
 -- center of the view, and makes it the camera's orbit point. Animated.
 function ToolContext:centerView(point: Vector3)
@@ -407,6 +433,104 @@ function ToolContext:confirm(options: SDK.ConfirmOptions): boolean
 		return true
 	end
 	return self._confirm(options)
+end
+
+-- Shows a message (e.g. an error) in a dialog with one button, and yields
+-- until it's dismissed: the button, Escape, or the tool shutting down.
+function ToolContext:alert(options: SDK.AlertOptions)
+	if type(options) ~= "table" or type(options.message) ~= "string" then
+		error("ctx:alert: options.message must be a string", 2)
+	end
+	if not self._alert then
+		warn(string.format("[StudioTools:%s] %s%s", self.toolId, if options.title then options.title .. ": " else "", options.message))
+		return
+	end
+	self._alert(options)
+end
+
+-- Shows a modal progress dialog (message and an animated bar) while the tool
+-- works on something the user must wait for, e.g. an upload on Accept.
+-- Viewport input, the shutdown buttons and Escape are blocked while it's
+-- open. Returns a handle: handle:setMessage(text), handle:close(). Closed
+-- automatically on deactivate.
+function ToolContext:showProgress(options: SDK.ProgressOptions): SDK.ProgressHandle
+	if type(options) ~= "table" or type(options.message) ~= "string" then
+		error("ctx:showProgress: options.message must be a string", 2)
+	end
+	local inner = if self._showProgress then self._showProgress(options) else nil
+	local handle = {}
+	function handle.setMessage(_handle: any, text: string)
+		if inner then
+			inner:setMessage(text)
+		end
+	end
+	function handle.close(_handle: any)
+		if inner then
+			inner:close()
+			inner = nil
+		end
+	end
+	self:addCleanup(function()
+		handle:close()
+	end)
+	return handle :: any
+end
+
+-- Local meshes ----------------------------------------------------------------
+
+-- Makes an EditableMesh-backed MeshPart survive saving the place: tags the
+-- part with a mesh id and stores the mesh on the dev server (in the
+-- background), from where it's restored when the place is opened again.
+-- Call it after creating or changing such a part, inside the undo recording
+-- that did so (it sets an attribute and a tag on the part). Returns the id.
+function ToolContext:saveLocalMesh(part: MeshPart): string
+	if typeof(part) ~= "Instance" or not part:IsA("MeshPart") then
+		error("ctx:saveLocalMesh: expected a MeshPart", 2)
+	end
+	if not self._saveLocalMesh then
+		error("ctx:saveLocalMesh: local meshes aren't available", 2)
+	end
+	return self._saveLocalMesh(part)
+end
+
+-- Stops treating a part as a local mesh, e.g. after giving it an uploaded
+-- mesh asset. Call it inside the undo recording that changed the part.
+function ToolContext:clearLocalMesh(part: MeshPart)
+	if typeof(part) ~= "Instance" or not part:IsA("MeshPart") then
+		error("ctx:clearLocalMesh: expected a MeshPart", 2)
+	end
+	if self._clearLocalMesh then
+		self._clearLocalMesh(part)
+	end
+end
+
+-- Uploads the part's mesh as a new Mesh asset and loads it back as an
+-- unparented MeshPart (see MeshUpload.luau). Yields; errors with a message
+-- for the user. Stops early if the tool deactivates meanwhile.
+function ToolContext:uploadMesh(part: MeshPart, options: SDK.UploadMeshOptions): SDK.UploadedMesh
+	if typeof(part) ~= "Instance" or not part:IsA("MeshPart") then
+		error("ctx:uploadMesh: expected a MeshPart", 2)
+	end
+	if type(options) ~= "table" or type(options.name) ~= "string" or options.name == "" then
+		error("ctx:uploadMesh: options.name must be a non-empty string", 2)
+	end
+	local ok, result = pcall(MeshUpload.upload, part, {
+		name = options.name,
+		description = options.description,
+		onStatus = options.onStatus,
+		isCancelled = function()
+			return self._destroyed
+		end,
+	})
+	if ok then
+		return result
+	end
+	local message = MeshUpload.cleanError(result)
+	if type(result) == "table" and result.cancelled then
+		message = "the tool closed during the upload"
+			.. if result.uri then string.format(" (the mesh was uploaded as %s, but isn't used)", result.uri) else ""
+	end
+	error(message, 0)
 end
 
 -- Re-queries canAccept() now instead of waiting for the next poll.
@@ -573,6 +697,7 @@ function ToolContext:log(...: any)
 end
 
 function ToolContext:destroy()
+	self._destroyed = true
 	self._maid:clean()
 end
 

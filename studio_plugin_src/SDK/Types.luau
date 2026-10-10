@@ -335,6 +335,30 @@ export type ToolContext = {
 	-- Shows a confirmation dialog in the viewport and waits for the answer
 	-- (yields). Escape, or the tool being shut down, answers false.
 	confirm: (self: ToolContext, options: ConfirmOptions) -> boolean,
+	-- Shows a message (e.g. an error) in a dialog with one button and waits
+	-- until it's dismissed (yields): the button, Escape, or the tool being
+	-- shut down.
+	alert: (self: ToolContext, options: AlertOptions) -> (),
+	-- Shows a modal progress dialog (message and an animated bar) while the
+	-- tool works on something the user must wait for, e.g. an upload on
+	-- Accept. Blocks viewport input, the shutdown buttons and Escape until
+	-- handle:close() (or deactivate). Doesn't yield.
+	showProgress: (self: ToolContext, options: ProgressOptions) -> ProgressHandle,
+
+	-- Local meshes: EditableMesh content isn't saved with the place. After
+	-- creating or changing a MeshPart that shows an EditableMesh, call
+	-- saveLocalMesh(part) inside the same undo recording: the part gets a
+	-- mesh id and the mesh is stored on the dev server (in the background),
+	-- and it's restored when the place is opened again. Returns the id.
+	saveLocalMesh: (self: ToolContext, part: MeshPart) -> string,
+	-- Stops treating the part as a local mesh (e.g. it now uses an uploaded
+	-- mesh asset). Call inside the undo recording that changed it.
+	clearLocalMesh: (self: ToolContext, part: MeshPart) -> (),
+	-- Uploads a MeshPart's mesh as a new Mesh asset owned by the Studio user
+	-- and loads it back as an unparented MeshPart, to give to parts with
+	-- MeshPart:ApplyMesh (destroy it afterwards). Yields; errors with a
+	-- message for the user. Needs the Studio beta "CreateAssetAsync Luau API".
+	uploadMesh: (self: ToolContext, part: MeshPart, options: UploadMeshOptions) -> UploadedMesh,
 	-- Re-queries canAccept() now instead of waiting for the next poll.
 	refreshShutdownButtons: (self: ToolContext) -> (),
 
@@ -355,6 +379,9 @@ export type ToolContext = {
 	-- Pans the camera (no rotation or zoom) to put a world point at the
 	-- center of the view, and orbits around it afterwards. Animated.
 	centerView: (self: ToolContext, point: Vector3) -> (),
+	-- Sets Studio's camera fly and mouse-wheel speeds to suit an object of
+	-- this size. The user's own speeds come back when the tool deactivates.
+	autoCameraSpeed: (self: ToolContext, size: Vector3) -> (),
 
 	beginUndo: (self: ToolContext, name: string) -> UndoRecording,
 	recordUndo: (self: ToolContext, name: string, fn: (...any) -> ...any, ...any) -> (boolean, any),
@@ -400,6 +427,34 @@ export type ConfirmOptions = {
 	message: string,
 	confirmText: string?, -- default "OK"
 	cancelText: string?, -- default "Cancel"
+}
+
+export type AlertOptions = {
+	title: string?,
+	message: string,
+	buttonText: string?, -- default "OK"
+}
+
+export type ProgressOptions = {
+	title: string?,
+	message: string,
+}
+
+export type ProgressHandle = {
+	setMessage: (self: ProgressHandle, text: string) -> (),
+	close: (self: ProgressHandle) -> (),
+}
+
+export type UploadMeshOptions = {
+	name: string, -- the asset's name
+	description: string?,
+	onStatus: ((text: string) -> ())?, -- progress messages, e.g. for handle:setMessage
+}
+
+export type UploadedMesh = {
+	assetId: number,
+	uri: string, -- "rbxassetid://<assetId>"
+	meshPart: MeshPart, -- unparented, made from the new asset
 }
 
 export type ShutdownButton = {

@@ -22,6 +22,8 @@ You can't see or operate Studio. Your feedback comes from `npm run check` (stati
 | `templates/toolpack/` | Template copied by `npm run new-pack` | — |
 | `docs/TOOLPACKS.md` | The tool pack contract. Read it before changing packs or the SDK. | — |
 
+`local_meshes/` (gitignored) is user data: the stored meshes of local-mesh MeshParts (see "Local meshes" in the README). Never delete or edit it.
+
 Generated or managed, never edit by hand: `toolpacks/*/src/SDK.luau` (use `npm run export-sdk`), `.toolpacks/` (git pack cache), `.tools/` (luau-lsp), `.libraries/` (downloaded libraries; read `.libraries/<name>-<tag>/src/` for a library's source, but change it in the library's own repo), `logs/`, `.chat/` (Studio chat conversation).
 
 You may be running headless from the Studio "Tools Agent" chat box (`server/chat.js`), as Claude Code or Codex. In that case you also get the instructions in `server/agent-instructions.md`: the user sees only your text replies, nobody can approve permission prompts (actions that need approval are refused), and new tools go in `user_toolpacks/user/`.
@@ -56,7 +58,7 @@ If the log shows nothing new after a save, the server may not be running, or Stu
 ## Rules
 
 - **No side effects at module load.** Every module is required during validation. Do work in `activate` / `start`, not at the top level.
-- **Tools use `ctx` for cleanup and undo.** Connect and create through `ctx` (`ctx:connect`, `ctx:createHighlight`, ...) so deactivation cleans up. Put changes to the place inside `ctx:recordUndo` / `ctx:beginUndo`; edits to a tool's own state (e.g. an in-memory mesh) are recorded with `ctx:addUndoStep`. Temporary 3D content goes in `ctx:createTemporaryModel()`.
+- **Tools use `ctx` for cleanup and undo.** Connect and create through `ctx` (`ctx:connect`, `ctx:createHighlight`, ...) so deactivation cleans up. Put changes to the place inside `ctx:recordUndo` / `ctx:beginUndo`; edits to a tool's own state (e.g. an in-memory mesh) are recorded with `ctx:addUndoStep`. Temporary 3D content goes in `ctx:createTemporaryModel()`. A MeshPart left in the place with an EditableMesh as its mesh must be registered with `ctx:saveLocalMesh(part)`, or it's lost when the place is saved.
 - **Tools take mouse input through input behaviors**, not mouse events: `self:addInputBehavior(SDK.SingleClickInputBehavior:new({...}))` etc. (see "Input" in `docs/TOOLPACKS.md`). The InputManager (`System/InputManager.luau`) is the only code that listens to the mouse for tools. Behavior callbacks must not yield.
 - **Tool UI goes in the settings panel.** Values are `settings`, actions are `"button"` settings (handled in the tool's `onAction(key)`), progress goes in `ctx:setStatus`, and `ctx:setSettingState` shows/hides or enables/disables widgets. Only UI that can't live there goes in the viewport, and then in a panel from `ctx:createViewportPanel`, never a tool-made ScreenGui (the system keeps clicks on its panels from reaching the tool). See "Settings" and "Viewport panels" in `docs/TOOLPACKS.md`.
 - **Pack code uses only the SDK.** Packs require `script.Parent.Parent.SDK` (their generated `SDK.luau`), never `StudioTools.System`.

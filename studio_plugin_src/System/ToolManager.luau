@@ -58,6 +58,9 @@ local UserInputService = game:GetService("UserInputService")
 
 local SDK = require(script.Parent.Parent.SDK)
 local CameraMotion = require(script.Parent.CameraMotion)
+local CameraSpeed = require(script.Parent.CameraSpeed)
+local LocalMeshes = require(script.Parent.LocalMeshes)
+local LocalMeshChip = require(script.Parent.LocalMeshChip)
 local InputManager = require(script.Parent.InputManager)
 local SettingsStore = require(script.Parent.SettingsStore)
 local ViewportOverlay = require(script.Parent.ViewportOverlay)
@@ -195,17 +198,43 @@ function ToolManager.new(host: any, packsFolder: Instance?, options: any?)
 		end,
 	}))
 
+	-- Camera speeds a tool changed in a session that ended without restoring them.
+	CameraSpeed.recover(self.plugin)
+	-- give MeshParts made by tools their EditableMesh back after the place was reopened
+	self.localMeshes = self._maid:add(LocalMeshes.new(host.serverUrl))
+	self.localMeshes:start()
+	-- the "N Local Meshes" chip; while its Save All runs, no tool may start
+	self._systemBusy = nil :: string?
+	self._maid:add(LocalMeshChip.new({
+		plugin = self.plugin,
+		overlay = self.overlay,
+		localMeshes = self.localMeshes,
+		isToolActive = function()
+			return self.activeTool ~= nil
+		end,
+		toolChanged = self.changed,
+		setBusy = function(busy: boolean)
+			self._systemBusy = if busy then "Wait until the local meshes are saved" else nil
+			self.availabilityChanged:fire()
+		end,
+	}))
+
 	local build = host.build or {}
 	self:_loadPacks(packsFolder, build.packs or {}, build.failedPacks or {})
 
-	-- Escape dismisses an open confirmation dialog, or else requests that the
-	-- active tool shut down. Ignored while typing in a text box.
+	-- Escape dismisses an open confirmation dialog or chip menu, or else
+	-- requests that the active tool shut down. Ignored while typing in a text
+	-- box, and while a progress dialog is open (the tool is busy).
 	self._maid:add(UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		if gameProcessed or input.KeyCode ~= Enum.KeyCode.Escape then
 			return
 		end
 		if self.overlay:isConfirmOpen() then
 			self.overlay:resolveConfirm(false)
+		elseif self.overlay:isMenuOpen() then
+			self.overlay:closeMenu()
+		elseif self.overlay:isProgressOpen() then
+			return
 		elseif self.activeTool then
 			task.spawn(self.requestShutdown, self, self.escapeReason or Reason.Done, Trigger.Escape)
 		end
@@ -375,6 +404,9 @@ end
 -- Whether a tool can be started now (its class's canActivate()), and why
 -- not. A canActivate() that errors or yields counts as available.
 function ToolManager:getAvailability(entry: any): (boolean, string?)
+	if self._systemBusy then
+		return false, self._systemBusy
+	end
 	local definition = entry.definition
 	local ok, allowed, why
 	local thread = coroutine.create(function()
@@ -409,6 +441,21 @@ function ToolManager:activate(id: string)
 	ctx = ToolContext.new(self.host, entry, self.store:get(entry), {
 		confirm = function(options)
 			return self.overlay:confirm(options)
+		end,
+		alert = function(options)
+			self.overlay:alert(options)
+		end,
+		saveLocalMesh = function(part)
+			return self.localMeshes:save(part)
+		end,
+		clearLocalMesh = function(part)
+			self.localMeshes:clear(part)
+		end,
+		showProgress = function(options)
+			if self.activeContext ~= ctx then
+				return nil
+			end
+			return self.overlay:showProgress(options)
 		end,
 		refreshShutdownButtons = function()
 			if self.activeContext == ctx then
@@ -531,8 +578,13 @@ function ToolManager:requestShutdown(reason: string, trigger: string)
 	end
 
 	self._shutdownPending = true
+	self.overlay:setShutdownButtonsBusy(true)
 	local ok, allowed = xpcall(instance.confirmShutdown, debug.traceback, instance, reason, trigger)
 	self._shutdownPending = false
+	if self.activeInstance == instance then
+		self.overlay:setShutdownButtonsBusy(false)
+		self:refreshShutdownButtons()
+	end
 	if not ok then
 		-- Don't trap the user in a tool whose confirmShutdown() is broken.
 		warn(string.format("[StudioTools] Tool '%s' confirmShutdown() failed; shutting down:\n%s", self.activeTool.id, tostring(allowed)))

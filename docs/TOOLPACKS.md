@@ -227,7 +227,7 @@ function MyTool:confirmShutdown(reason: SDK.ShutdownReason, trigger: SDK.Shutdow
 end
 ```
 
-`ctx:confirm(options)` shows a modal dialog in the viewport and yields until the user answers. While it's open, viewport clicks don't reach the tool, and Escape answers "no". It also returns false if the tool is shut down meanwhile. If `confirmShutdown` errors, the shutdown goes ahead, so a bug can't trap the user in a tool. `Force` shutdowns don't call it and can't be refused.
+`ctx:confirm(options)` shows a modal dialog in the viewport and yields until the user answers. While it's open, viewport clicks don't reach the tool, and Escape answers "no". It also returns false if the tool is shut down meanwhile. `ctx:alert({ title?, message, buttonText? })` is the one-button version, for telling the user something (e.g. why Accept failed); it yields until dismissed. While a `confirmShutdown` call is running, the shutdown buttons are greyed out. A `confirmShutdown` that does slow work on Accept (an upload, building meshes) should also show `ctx:showProgress({ title?, message })`: a modal dialog with an animated bar that blocks viewport input and Escape until `handle:close()` (or deactivate). Update its text with `handle:setMessage(text)`; close it before showing an `alert`. The core pack's Save As MeshPart tool does this. If `confirmShutdown` errors, the shutdown goes ahead, so a bug can't trap the user in a tool. `Force` shutdowns don't call it and can't be refused.
 
 For Accept/Cancel tools, the system also polls `canAccept()` (about 10 times a second, and right before accepting) to enable or disable the Accept button:
 
@@ -445,8 +445,9 @@ The `ctx` passed to tools. Its type is `SDK.ToolContext`; the README has the ful
 - **Previews:** `createBoxPreview`, `createHighlight`, `createAdornment`, `createTemporaryModel` (see Temporary scene content).
 - **Undo:** `recordUndo`, `beginUndo`, `onUndoRedo`; `addUndoStep` for the tool's own state (see Undo for tool state).
 - **Tool UI:** `setStatus`, `setSettingState` (see Settings), `createViewportPanel` (see Viewport panels).
-- **Camera:** `focusView(cframe, size)` animates the camera to frame a box (its center and orientation, and its size), keeping the current view direction and making the box center the camera's orbit point. `centerView(point)` pans (no rotation or zoom) so a world point is at the center of the view, and makes it the orbit point. Tools bind these to keys themselves, e.g. F with `ctx:onKey`. (While no tool is active and the palette is open, the system itself binds C to center the view on the surface under the mouse.)
+- **Camera:** `focusView(cframe, size)` animates the camera to frame a box (its center and orientation, and its size), keeping the current view direction and making the box center the camera's orbit point. `centerView(point)` pans (no rotation or zoom) so a world point is at the center of the view, and makes it the orbit point. Tools bind these to keys themselves, e.g. F with `ctx:onKey`. (While no tool is active and the palette is open, the system itself binds C to center the view on the surface under the mouse.) `autoCameraSpeed(size)` sets Studio's camera fly speed (WASD) and mouse-wheel zoom step to suit an object of that size, so small and huge objects are both comfortable to move around. Those speeds are user preferences shared by all places, so the values from when the tool started are restored when it deactivates (and, if Studio closed first, the next time the plugin starts).
 - **Tools Agent:** `askAgent` (see below).
+- **Meshes:** `saveLocalMesh`, `clearLocalMesh` (see Local meshes), `uploadMesh` (upload a MeshPart's mesh as a new Mesh asset; yields, errors with a message for the user).
 - **Cleanup:** `connect`, `addCleanup`.
 
 ### Temporary scene content
@@ -460,6 +461,10 @@ For real 3D content, such as a preview mesh, `ctx:createTemporaryModel(name?)` r
 Studio's undo history only covers the place. A tool that edits state of its own, such as a mesh it keeps in memory, records each edit with `ctx:addUndoStep(name, undo, redo)` after making it. That adds a Studio waypoint named `name`, so Ctrl+Z, Ctrl+Y and the undo buttons undo and redo the tool's edits in order with everything else; `undo()` and `redo()` run while the tool is active and must not yield. Adding a step drops any steps that were undone. After the tool deactivates its waypoints stay in Studio's history but do nothing when undone.
 
 Internally each step sets an attribute (`StudioToolsUndoStep`) on the Workspace, since a waypoint needs a change Studio tracks; the attribute is removed on deactivate.
+
+### Local meshes
+
+A MeshPart made from an EditableMesh (`AssetService:CreateMeshPartAsync(Content.fromObject(editable))`, or `ApplyMesh` from such a part) loses its mesh when the place is saved and opened again: Studio doesn't save EditableMesh content. A tool that leaves such a part in the place calls `ctx:saveLocalMesh(part)` after creating or changing it, inside the same undo recording. The system gives the part a mesh id (attribute `StudioToolsLocalMeshId`, tag `StudioToolsLocalMesh`), stores the mesh on the dev server in the background, and gives it back whenever the place is opened (see "Local meshes" in the README). Call it again after editing the same EditableMesh to update the stored copy. A tool that gives such a part a regular mesh asset calls `ctx:clearLocalMesh(part)`. The core pack's Bake Transform, Sculpt and Save As MeshPart tools show how.
 
 ### Tools Agent requests
 

@@ -9,3 +9,4 @@ toolpacks.local.json
 user_toolpacks/
 .chat/
 .env
+local_meshes/

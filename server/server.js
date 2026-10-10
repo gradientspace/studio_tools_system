@@ -23,6 +23,8 @@
 //                              queued behind the agent's current work -> { id, status, ... }
 //   GET  /chat/requests/poll?id=&status= -> that request's status/reply (long-poll)
 //   POST /chat/requests/cancel <- { id }
+//   POST /localmesh/save    <- { placeId, id, data (base64), meta }: store a local mesh (see localmeshes.js)
+//   GET  /localmesh/load?place=<placeId>&id=<id> -> { id, data (base64) }, or 404
 //
 // Security: requests must address the server as localhost (blocks DNS
 // rebinding), and POSTs must carry an `X-Studio-Tools: 1` header, which a web
@@ -38,6 +40,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const packs = require("./packs");
 const chat = require("./chat");
+const localMeshes = require("./localmeshes");
 const { REPO_ROOT, SRC_DIR, treeFiles } = require("./tree");
 
 const PORT = Number(process.env.PORT) || 34873;
@@ -215,8 +218,8 @@ function isAllowedHost(req) {
 function handlePost(req, res, url) {
   if (req.headers["x-studio-tools"] !== "1") return sendJson(res, 403, { error: "missing X-Studio-Tools header" });
 
-  const withBody = (handler) =>
-    readJsonBody(req, 1024 * 1024, (err, body) => {
+  const withBody = (handler, limit = 1024 * 1024) =>
+    readJsonBody(req, limit, (err, body) => {
       if (err) return sendJson(res, 400, { error: "invalid JSON" });
       handler(body || {});
     });
@@ -238,6 +241,15 @@ function handlePost(req, res, url) {
       return withBody((body) => reply(chat.submitRequest(body)));
     case "/chat/requests/cancel":
       return withBody((body) => reply(chat.cancelRequest(body.id)));
+    case "/localmesh/save":
+      return withBody((body) => {
+        try {
+          reply(localMeshes.save(body));
+        } catch (err) {
+          log(`Couldn't store local mesh ${body.id}: ${err.message}`);
+          sendJson(res, 500, { error: err.message });
+        }
+      }, localMeshes.MAX_BODY_BYTES);
     default:
       return sendJson(res, 404, { error: "not found" });
   }
@@ -275,6 +287,11 @@ function handleRequest(req, res) {
 
     case "/chat/requests/poll":
       return chat.pollRequest(req, res, url, sendJson);
+
+    case "/localmesh/load": {
+      const result = localMeshes.load(url.searchParams.get("place") || "", url.searchParams.get("id") || "");
+      return sendJson(res, result.status, result.body);
+    }
 
     case "/poll": {
       const since = url.searchParams.get("since") || "";
@@ -330,6 +347,7 @@ try {
 
 log(`Framework: ${SRC_DIR}`);
 log(`Log file: ${LOG_PATH}`);
+log(`Local meshes: ${localMeshes.LOCAL_MESH_DIR}`);
 chat.init({ log });
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
