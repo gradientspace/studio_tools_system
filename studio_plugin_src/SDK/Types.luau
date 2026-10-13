@@ -36,6 +36,10 @@ export type SettingSchema = {
 	tooltip: string?,
 	-- Presentation options (see SettingExtendedOptions).
 	extended: SettingExtendedOptions?,
+	-- number / integer / string: shown in a field the user can't edit (no
+	-- slider); only the tool sets it, with ctx:setSetting. Not remembered
+	-- between sessions: it starts at `default`.
+	readOnly: boolean?,
 	-- number / integer (an integer's step is a whole number, default 1)
 	min: number?,
 	max: number?,

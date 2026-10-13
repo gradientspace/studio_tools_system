@@ -511,6 +511,7 @@ function Palette:_settingRow(entry: any, schema: any, initialValue: any): (GuiOb
 	local extended = if type(schema.extended) == "table" then schema.extended else {}
 	local value = initialValue
 	local enabled = true
+	local readOnly = schema.readOnly == true and (kind == "number" or kind == "integer" or kind == "string")
 	local editableBoxes: { TextBox } = {}
 	local function set(newValue: any)
 		if enabled then
@@ -608,6 +609,13 @@ function Palette:_settingRow(entry: any, schema: any, initialValue: any): (GuiOb
 		if not box.Parent then
 			box.Parent = editorFrame
 		end
+		if readOnly then
+			-- shows the value; only the tool changes it
+			box.TextEditable = false
+			box.Selectable = false
+			box.BackgroundTransparency = 1
+			return box
+		end
 		table.insert(editableBoxes, box)
 		box.FocusLost:Connect(function()
 			local parsed = parse(box.Text)
@@ -624,7 +632,7 @@ function Palette:_settingRow(entry: any, schema: any, initialValue: any): (GuiOb
 			return if type(v) == "number" then formatSettingNumber(kind, v) else ""
 		end
 		local min, max = schema.min, schema.max
-		local slider = extended.widget == "slider"
+		local slider = extended.widget == "slider" and not readOnly
 		if slider and not (type(min) == "number" and type(max) == "number" and max > min) then
 			warn(string.format("[StudioTools] Tool '%s' setting '%s': a slider needs min < max; showing a text field", entry.id, schema.key))
 			slider = false

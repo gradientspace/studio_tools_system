@@ -103,7 +103,7 @@ function SettingsStore:get(entry: any): { [string]: any }
 
 	values = {}
 	for _, schema in entry.definition.settings or {} do
-		local value = coerce(schema, saved[schema.key])
+		local value = if schema.readOnly then nil else coerce(schema, saved[schema.key])
 		if value == nil then
 			value = schema.default
 		end
@@ -128,7 +128,7 @@ function SettingsStore:set(entry: any, key: string, value: any): any
 
 	local serialized = {}
 	for _, s in entry.definition.settings or {} do
-		if values[s.key] ~= nil then
+		if values[s.key] ~= nil and not s.readOnly then
 			serialized[s.key] = serialize(s, values[s.key])
 		end
 	end

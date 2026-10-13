@@ -374,7 +374,7 @@ A base class that has to live in `Tools/` (for example, so other packs can find 
 | `"button"` | | full-width button | none: an action (see below) |
 | `"label"` | | full-width text (its `label`) | none: display only |
 
-Every schema has `key` and `type`, optionally `label`, `tooltip` and `extended`, and every type except `"button"` and `"label"` has a `default`. A `tooltip` shows when the mouse rests on the setting's row for half a second. A `"label"` row shows its `label` as wrapped text; change the text with `ctx:setSettingState(key, { label = ... })`.
+Every schema has `key` and `type`, optionally `label`, `tooltip` and `extended`, and every type except `"button"` and `"label"` has a `default`. A `tooltip` shows when the mouse rests on the setting's row for half a second. A `"label"` row shows its `label` as wrapped text; change the text with `ctx:setSettingState(key, { label = ... })`. A `"number"`, `"integer"` or `"string"` setting with `readOnly = true` shows its value in a field the user can't edit (never a slider), for values the tool reports, such as a triangle count; the tool sets it with `ctx:setSetting`, and it isn't remembered between sessions.
 
 **Extended options.** `extended` is a table of presentation options; they change how a setting is shown, never its value, and options that don't apply to the type are ignored:
 
