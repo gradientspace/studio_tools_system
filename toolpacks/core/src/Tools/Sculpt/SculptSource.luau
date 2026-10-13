@@ -16,29 +16,18 @@
 	normal is recomputed as the area-weighted average of the faces that use
 	it, so hard edges stay hard. Then it makes a MeshPart from the copy.
 
-	apply() gives the part that mesh in place (MeshPart:ApplyMesh), with
-	Size = s * S' and CFrame = CFrame * (s * c'), so the mesh shows exactly
-	where it was sculpted. The pivot, the part's attachments and its joints'
-	C0/C1 are re-expressed in the new frame so nothing else moves; joints and
-	weld constraints are switched off while the part moves, or moving it
-	would drag what it's welded to.
+	apply() gives the part that mesh in place, with Size = s * S' and
+	CFrame = CFrame * (s * c'), so the mesh shows exactly where it was
+	sculpted (Shared/MeshPartUpdate.luau).
 ]]
 
 local AssetService = game:GetService("AssetService")
 
+local MeshPartUpdate = require(script.Parent.Parent.Parent.Shared.MeshPartUpdate)
 local SculptMesh = require(script.Parent.SculptMesh)
 
 local SculptSource = {}
 SculptSource.__index = SculptSource
-
-local function partScale(part: MeshPart): Vector3
-	local size, meshSize = part.Size, part.MeshSize
-	return Vector3.new(
-		if meshSize.X > 1e-6 then size.X / meshSize.X else 1,
-		if meshSize.Y > 1e-6 then size.Y / meshSize.Y else 1,
-		if meshSize.Z > 1e-6 then size.Z / meshSize.Z else 1
-	)
-end
 
 -- Loads the part's mesh and the SculptMesh made from it (self.sm). Yields;
 -- errors if the mesh can't be loaded or has no triangles.
@@ -49,7 +38,7 @@ function SculptSource.load(part: MeshPart)
 		self.part = part
 		self.editable = editable
 		self.applied = false
-		self.scale = partScale(part)
+		self.scale = MeshPartUpdate.scaleOf(part)
 		local center = editable:GetCenter()
 
 		-- the original positions, relative to the bounds center, for vertices
@@ -156,75 +145,11 @@ function SculptSource:build(): MeshPart
 	})
 end
 
-local function isJoint(instance: Instance): boolean
-	return instance:IsA("JointInstance") or instance:IsA("WeldConstraint")
-end
-
--- The joints and weld constraints connected to the part, including
--- disabled ones (GetJoints only returns active ones).
-local function jointsOf(part: BasePart): { any }
-	local found: { [Instance]: boolean } = {}
-	local list = {}
-	local function add(joint: any)
-		if not found[joint] and isJoint(joint) and (joint.Part0 == part or joint.Part1 == part) then
-			found[joint] = true
-			table.insert(list, joint)
-		end
-	end
-	for _, joint in part:GetJoints() do
-		add(joint)
-	end
-	local root: Instance = part
-	while root.Parent and root.Parent ~= game do
-		root = root.Parent
-	end
-	for _, instance in root:GetDescendants() do
-		if isJoint(instance) then
-			add(instance)
-		end
-	end
-	return list
-end
-
 -- Gives the part the mesh from build(), keeping it where it was sculpted.
 -- Call inside an undo recording; doesn't yield.
 function SculptSource:apply(built: MeshPart)
-	local part: MeshPart = self.part
-	-- the part's current scale: if it was resized meanwhile, the mesh follows
-	local scale = partScale(part)
-	local offset = CFrame.new(scale * self.newCenter)
-	local inverse = offset:Inverse()
-
-	local joints = jointsOf(part)
-	local enabled = {}
-	for i, joint in joints do
-		enabled[i] = joint.Enabled
-		joint.Enabled = false
-	end
-
-	part:ApplyMesh(built)
+	MeshPartUpdate.apply(self.part, built, self.newCenter, self.newSize)
 	self.applied = true
-	part.Size = scale * self.newSize
-	part.CFrame = part.CFrame * offset
-	part.PivotOffset = inverse * part.PivotOffset
-	for _, child in part:GetChildren() do
-		if child:IsA("Attachment") then
-			child.CFrame = inverse * child.CFrame
-		end
-	end
-
-	for i, joint in joints do
-		if joint:IsA("JointInstance") then
-			if joint.Part0 == part then
-				joint.C0 = inverse * joint.C0
-			end
-			if joint.Part1 == part then
-				joint.C1 = inverse * joint.C1
-			end
-		end
-		-- a weld constraint keeps the offset it finds when it's enabled again
-		joint.Enabled = enabled[i]
-	end
 end
 
 -- Frees the editable copy, unless the part now shows it.
