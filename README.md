@@ -12,7 +12,7 @@ Tools come in **tool packs**: folders or separate git repos with a small manifes
 studio_plugin/StudioToolsLoader.lua   Loader plugin installed in Studio (toolbar, dock widget, HTTP, hot reload)
 server/                               Dev server: bundles the framework + packs, watches for changes, syncs git packs
 studio_plugin_src/                    The framework (hot-reloaded)
-  SDK/                                  public, versioned API for packs: Tool base class, types, Maid, Signal
+  SDK/                                  public, versioned API for packs: Tool base class, types, Maid, Signal, Terrain edits
   System/                               internals: entry point, ToolManager, ToolContext, Palette UI, settings
 toolpacks.json                        Tool packs everyone gets (local paths and/or git repos)
 toolpacks.local.json                  Your own packs, same format (gitignored)
@@ -22,8 +22,9 @@ libraries.json                        Libraries bundled into the plugin, pinned 
 toolpacks/core/                       Built-in pack; reference for writing your own
   toolpack.json                         pack manifest
   src/SDK.luau                          generated SDK types + forwarder (npm run export-sdk)
-  src/Tools/                            PlaceBlock, PaintBlock, MoveBlock, EraseBlock
-  src/Shared/                           Blocks helpers, PartPickerTool base class
+  src/Tools/                            Block tools, mesh tools (Model tab), terrain tools
+  src/Shared/                           Blocks helpers; base classes: PartPickerTool, CurveDrawingTool,
+                                          TerrainCurveTool, TerrainBrushTool
 docs/TOOLPACKS.md                     Tool pack contract
 templates/toolpack/                   Template used by npm run new-pack
 AGENTS.md, CLAUDE.md                  Instructions for coding agents working in this repo
@@ -219,4 +220,7 @@ Tools can extend other tool classes (`Base:extend({...})`, overriding methods an
 - **Sculpt** (Model tab) — brush sculpting of the selected MeshPart: Clay, Draw, Flatten, Smooth, Inflate, Pinch, Crease and Grab brushes, with strength, screen- or world-space size, falloff curves, spacing, X/Y/Z mirroring and front-faces-only. Ctrl/Cmd inverts, Shift smooths, `[` / `]` resize, F frames the mesh and Shift+F the brush area, C centers the view on the point under the cursor, and every stroke is a Studio undo step. Shown textured, untextured or flat shaded. An Accept/Cancel tool: Apply writes the sculpt into the part in place (one undo step; the part keeps its pivot, attachments and welds, and is moved and resized only as much as its new bounds need), making it a local mesh that can be sculpted again, until Save As MeshPart uploads it.
 - **Bake Transform** (Model tab) — bakes the rotation and/or scale of the selected MeshParts into their meshes, and optionally moves their pivots to the center or base. Shows each part's new bounding box and pivot while active; Bake replaces each part with a copy using the baked mesh (an EditableMesh) in one undo step, keeping properties and children and repointing welds and constraints. Meshes the user can't edit are skipped.
 - **Save As MeshPart** (Model tab) — uploads the selected MeshPart's mesh as a new Mesh asset in your inventory (e.g. to make a baked, in-memory EditableMesh permanent), then either gives the part the uploaded mesh (Replace Input) or adds a copy that uses it. Errors are shown in a dialog.
+- **Terrain Brush** (Terrain section) — raise, lower, smooth or flatten the terrain with a round brush (radius, strength, falloff, material of raised terrain). Raise and lower build up while the mouse is held; flatten levels toward the height where the stroke started. Ctrl/Cmd inverts, Shift smooths, `[` / `]` resize, C centers the view. Where there's no terrain, it builds up from height 0. Each stroke is one undo step.
+- **Raise Polygon / Lower Polygon / Raise Path / Lower Path** (Terrain section) — draw a curve on the terrain, then the terrain is raised or lowered over it (`SDK.Terrain`). Drag to draw freehand, or click to place points (click the first point to close, the last point or Enter to finish; Backspace removes a point, Esc cancels); a path that ends on its first point is a loop. The curve is 2D: it's shown projected down to the height of its lowest point, which the Max/Min/Replace modes use as their base. Settings: height or depth, falloff profile and width, a plateau / flat-bottom cap, combine mode, material, corner rounding; paths add a width and taper; the lower tools can push thin terrain down instead of cutting it, and fill the result with water. Changing a setting afterwards re-applies the last edit with it (each adjustment is an undo step) until the next curve is started; Apply Again applies it once more on top. Built on `Shared/CurveDrawingTool` (the drawing, for any tool that needs a polygon or path) and `Shared/TerrainCurveTool`.
+- **Paint Terrain** (Terrain section) — paint a terrain material with a brush, down to a depth, with an optional scattered edge, a slope range (e.g. rock only on steep sides) and an "only over" material. Ctrl/Cmd+click picks up the material under the cursor.
 - **Remesh** (Model tab) — rebuilds the selected MeshPart's mesh with evenly sized triangles (geometry3luau Remesher), aiming for a target triangle count up to 20,000 (Reducer simplifies anything over that). Re-runs in the background as the settings change, previews the result with a wireframe, and shows the resulting triangle count. Apply gives the part the new mesh in place, as a local mesh. UVs aren't kept.

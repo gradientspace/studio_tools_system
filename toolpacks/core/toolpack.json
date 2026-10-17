@@ -4,6 +4,6 @@
   "version": "0.1.0",
   "apiVersion": 1,
   "tab": "Core",
-  "description": "Basic block placing, painting, moving and erasing tools.",
+  "description": "Block tools, mesh tools (Model tab) and terrain tools: brushes, and raising or lowering over drawn polygons and paths.",
   "source": "src"
 }
