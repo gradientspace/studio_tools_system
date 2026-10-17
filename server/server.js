@@ -131,11 +131,26 @@ function setWatchedDirs(dirs) {
   for (const dir of dirs) {
     if (watchers.has(dir) || !fs.existsSync(dir)) continue;
     try {
-      watchers.set(dir, fs.watch(dir, { recursive: true }, scheduleRebuild));
+      const watcher = fs.watch(dir, { recursive: true }, () => {
+        // On Windows a watcher on a deleted directory fires events nonstop,
+        // which would keep postponing the rebuild forever; drop it instead.
+        if (!fs.existsSync(dir)) unwatch(dir, watcher);
+        scheduleRebuild();
+      });
+      watcher.on("error", () => {
+        unwatch(dir, watcher);
+        scheduleRebuild();
+      });
+      watchers.set(dir, watcher);
     } catch (err) {
       log(`Can't watch ${dir}: ${err.message}`);
     }
   }
+}
+
+function unwatch(dir, watcher) {
+  watcher.close();
+  if (watchers.get(dir) === watcher) watchers.delete(dir);
 }
 
 function loadPacks() {
