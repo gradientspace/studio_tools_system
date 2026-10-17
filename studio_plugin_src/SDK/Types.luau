@@ -553,6 +553,256 @@ export type ToolClass = {
 	onAction: (self: any, key: string) -> (),
 }
 
+-- Terrain ------------------------------------------------------------------
+-- SDK.Terrain: higher-level edits of the place's smooth terrain (see
+-- "Terrain" in docs/TOOLPACKS.md). Heights are world Y in studs. XZ points
+-- are Vector3s (Y ignored unless noted) or Vector2s (X, Z). Nothing here
+-- records undo: call the edits inside ctx:recordUndo / ctx:beginUndo.
+
+-- The falloff profile: maps t, from 0 at the outer edge of a shape's ramp
+-- to 1 at its inner edge, to a weight from 0 to 1.
+--   linear      t
+--   square      t^2: gentle at the edge, steep inside
+--   sqrt        sqrt(t): steep at the edge, rounded inside
+--   smoothstep  3t^2 - 2t^3: smooth at both ends
+--   round       a quarter circle (dome)
+--   constant    1 anywhere inside the shape (a hard edge)
+--   smooth      linear, over a smoothed distance field: corners, ridges and
+--               the peak are rounded (sets a default `smoothing`)
+--   a function  (t) -> weight
+export type TerrainFalloff = "linear" | "square" | "sqrt" | "smoothstep" | "round" | "constant" | "smooth" | (t: number) -> number
+
+-- How a new height V combines with a column's surface height H:
+--   replace   V
+--   max       max(H, V)
+--   min       min(H, V)
+--   stamp     H + V * multiplier (V is an offset)
+--   blend     smooth max of H and V (rounded within blendRadius)
+--   blendMin  smooth min of H and V
+-- The result is then mixed with H by the edit's weight (strength, falloff).
+export type TerrainCombineMode = "replace" | "max" | "min" | "stamp" | "blend" | "blendMin"
+
+-- A reference height: a world Y, or measured from the terrain around the
+-- shape's outer edge (its lowest, mean or highest surface height), or
+-- "path": the Y of the path at the nearest point (paths of Vector3s).
+export type TerrainBase = number | "boundaryMin" | "boundaryMean" | "boundaryMax" | "path"
+
+-- Values on a regular XZ grid. values[i][j] is at X = lerp(min.X, max.X,
+-- (i - 1) / (#values - 1)), Z = lerp(min.Y, max.Y, (j - 1) / (#values[1] - 1))
+-- (Vector2.Y is world Z). nil values are holes: no change there. Optional
+-- weights (same layout, 0 to 1) scale the edit per sample.
+export type TerrainHeightField = {
+	min: Vector2,
+	max: Vector2,
+	values: { { number? } },
+	weights: { { number } }?,
+}
+
+-- A polygon (an area) or a path (a stroke along a polyline), made with
+-- SDK.Terrain.polygon / SDK.Terrain.path. Every shape edit takes either.
+export type TerrainShape = {
+	kind: "polygon" | "path",
+	points: { Vector3 },
+	hasY: boolean, -- the points carry heights (made from Vector3s)
+	closed: boolean, -- a closed path joins its last point to its first
+	radius: number, -- path: half-width of the full-strength core
+	widthScale: { number }?, -- path: multiplies radius and falloffWidth along it
+	heightScale: { number }?, -- path: multiplies the height of raise/lower along it
+}
+
+export type TerrainPoints = { Vector3 } | { Vector2 }
+
+-- Options of SDK.Terrain.path. widthScale and heightScale are interpolated
+-- along the path: one value per point is interpolated along each segment;
+-- any other count is spread evenly by arc length (2 values: start to end).
+export type TerrainPathOptions = {
+	closed: boolean?, -- default false
+	radius: number?, -- default 0: the falloff starts at the center line
+	widthScale: { number }?,
+	heightScale: { number }?,
+}
+
+-- Options shared by all edits.
+export type TerrainEditOptions = {
+	-- Where to look for the terrain surface (default -1024 to 2048).
+	searchMinY: number?,
+	searchMaxY: number?,
+	-- Surface height assumed where a column has no terrain (default 0). Raising
+	-- or filling there builds terrain up from this height.
+	emptyHeight: number?,
+	-- Yield (task.wait) now and then, for big edits from code that may yield.
+	yield: boolean?,
+	-- Compute the edit without changing the terrain.
+	dryRun: boolean?,
+	-- Return the new surface heights (height edits; always with dryRun).
+	returnHeights: boolean?,
+	-- Keep a copy of the voxels the edit changes (result.snapshot), so
+	-- SDK.Terrain.restore can put them back, e.g. to redo a live edit
+	-- with new settings. Not with modifyVoxels.
+	snapshot: boolean?,
+}
+
+-- Options of edits that change surface heights.
+export type TerrainHeightWriteOptions = TerrainEditOptions & {
+	-- Material of raised voxels (default: the column's surface material, or
+	-- Grass) and of the new surface where it's lowered (default: unchanged).
+	material: Enum.Material?,
+	-- Lowering moves the top of the terrain down instead of cutting it, so a
+	-- thin layer (a bridge, a ledge) sinks instead of breaking: the terrain
+	-- from the surface down to pushDepth (default 8) moves down rigidly, and
+	-- the band below it (compressionDepth, default 16, at least 1.25x the
+	-- drop) is squeezed. Set both to 0 to cut instead.
+	pushDepth: number?,
+	compressionDepth: number?,
+}
+
+-- How a shape weights the columns around it. The ramp is falloffWidth
+-- studs wide (default: for an "inside" polygon, its inradius, so the ramp
+-- reaches its middle; otherwise 16) and runs from the shape's edge
+-- inward ("inside"), outward ("outside"), or across it ("center"). The
+-- default is "inside" for polygons, "outside" for paths (measured from the
+-- path's radius). smoothing (studs) blurs the distance field first.
+export type TerrainShapeFalloffOptions = {
+	falloff: TerrainFalloff?,
+	falloffWidth: number?,
+	falloffAlign: ("inside" | "outside" | "center")?,
+	smoothing: number?,
+}
+
+-- SDK.Terrain.raise / lower. The shape's raise is R = height * falloff
+-- weight (* the path's heightScale), capped at maxHeight (a flat top).
+-- mode "stamp" (default) adds R to the terrain (lower: subtracts it). The
+-- other modes combine base + R (lower: base - R) with the terrain; the
+-- default base is "path" for paths with heights, else boundaryMin for max
+-- and blend, boundaryMax for min and blendMin, boundaryMean for replace.
+export type TerrainRaiseOptions = TerrainHeightWriteOptions & TerrainShapeFalloffOptions & {
+	height: number,
+	maxHeight: number?,
+	mode: TerrainCombineMode?,
+	base: TerrainBase?,
+	strength: number?, -- 0 to 1, default 1
+	blendRadius: number?, -- blend / blendMin, default 8
+}
+
+-- SDK.Terrain.flatten: moves the surface to `level` (default "path" for
+-- paths with heights, else boundaryMean), blending out over the falloff
+-- (default: smoothstep, "outside", 8 studs).
+export type TerrainFlattenOptions = TerrainHeightWriteOptions & TerrainShapeFalloffOptions & {
+	level: TerrainBase?,
+	strength: number?,
+}
+
+-- SDK.Terrain.smooth: blurs the surface heights (Gaussian, radius studs,
+-- default 8), weighted by the falloff (default: smoothstep over 16 studs).
+export type TerrainSmoothOptions = TerrainHeightWriteOptions & TerrainShapeFalloffOptions & {
+	radius: number?,
+	strength: number?,
+}
+
+-- SDK.Terrain.paint: sets the material of the solid voxels within `depth`
+-- (default 4) of the surface. With a soft falloff, dither scatters the
+-- edge (paints where the weight beats a per-column random value);
+-- otherwise every column with a weight above 0 is painted. Columns can be
+-- limited by the materials already there and by slope (degrees). The
+-- default falloff is "constant" over 2 studs, so a path paints about its
+-- radius (and a radius-0 path a line one column wide).
+export type TerrainPaintOptions = TerrainEditOptions & TerrainShapeFalloffOptions & {
+	material: Enum.Material,
+	depth: number?,
+	dither: boolean?,
+	onlyMaterials: { Enum.Material }?,
+	minSlope: number?,
+	maxSlope: number?,
+}
+
+-- SDK.Terrain.fill: fills the air above the surface, up to `level`, with
+-- `material` (default Water; water fills the liquid channel, so it also
+-- fills around partial solid voxels). Air drains liquid below the level.
+-- level defaults to "path" for paths with heights, else boundaryMin (the
+-- lowest point of the rim, so a basin fills without spilling); levelOffset
+-- is added to it. Like paint, a path fills about its radius.
+export type TerrainFillOptions = TerrainEditOptions & TerrainShapeFalloffOptions & {
+	material: Enum.Material?,
+	level: TerrainBase?,
+	levelOffset: number?,
+}
+
+-- SDK.Terrain.combineWithHeightField. The field is interpolated (cubic,
+-- through the values, or linear) at each voxel column and combined with
+-- the surface (mode, default "replace"). edgeFalloff (studs, default 0)
+-- fades the edit out toward the field's edges.
+export type TerrainHeightFieldOptions = TerrainHeightWriteOptions & {
+	mode: TerrainCombineMode?,
+	multiplier: number?, -- stamp, default 1
+	strength: number?,
+	blendRadius: number?,
+	interpolation: ("cubic" | "linear")?,
+	edgeFalloff: number?,
+}
+
+-- The original voxels of an edit made with `snapshot = true`.
+export type TerrainSnapshot = {
+	tiles: { any },
+}
+
+export type TerrainEditResult = {
+	columns: number, -- voxel columns changed (or that would change, with dryRun)
+	region: Region3?, -- voxel-aligned bounds of the changed voxels (nil with dryRun)
+	heights: TerrainHeightField?, -- surface heights afterwards (returnHeights / dryRun)
+	snapshot: TerrainSnapshot?, -- with `snapshot = true` (and not dryRun)
+}
+
+-- Called by modifyVoxels for each voxel: its center, material, solid and
+-- liquid occupancy. Return new values (nil keeps a value).
+export type TerrainVoxelFunction = (position: Vector3, material: Enum.Material, solid: number, liquid: number) -> (Enum.Material?, number?, number?)
+
+export type TerrainLibrary = {
+	VOXEL_SIZE: number,
+
+	-- Shapes
+	polygon: (points: TerrainPoints) -> TerrainShape,
+	path: (points: TerrainPoints, options: TerrainPathOptions?) -> TerrainShape,
+	circle: (center: Vector3 | Vector2, radius: number, segments: number?) -> { Vector3 },
+	-- Rounds a polyline's corners (Chaikin), `iterations` times (default 3).
+	-- Keeps the ends of an open path.
+	smoothPath: (points: TerrainPoints, options: { closed: boolean?, iterations: number? }?) -> { Vector3 },
+
+	-- Reading
+	surfaceHeight: (x: number, z: number, options: TerrainEditOptions?) -> (number?, Enum.Material?),
+	readHeightField: (min: Vector2, max: Vector2, options: TerrainEditOptions?) -> TerrainHeightField,
+	sampleHeightField: (field: TerrainHeightField, x: number, z: number, interpolation: ("cubic" | "linear")?) -> number?,
+
+	-- Generic edits
+	modifyHeights: (min: Vector2, max: Vector2, fn: (x: number, z: number, height: number?) -> number?, options: TerrainHeightWriteOptions?) -> TerrainEditResult,
+	modifyVoxels: (region: Region3, fn: TerrainVoxelFunction, options: { yield: boolean? }?) -> number,
+	combineWithHeightField: (field: TerrainHeightField, options: TerrainHeightFieldOptions?) -> TerrainEditResult,
+	-- Puts back the voxels an edit made with `snapshot = true` changed.
+	-- Only valid while nothing else has changed that terrain since.
+	restore: (snapshot: TerrainSnapshot, options: { yield: boolean? }?) -> (),
+
+	-- Shape edits
+	raise: (shape: TerrainShape, options: TerrainRaiseOptions) -> TerrainEditResult,
+	lower: (shape: TerrainShape, options: TerrainRaiseOptions) -> TerrainEditResult,
+	flatten: (shape: TerrainShape, options: TerrainFlattenOptions?) -> TerrainEditResult,
+	smooth: (shape: TerrainShape, options: TerrainSmoothOptions?) -> TerrainEditResult,
+	paint: (shape: TerrainShape, options: TerrainPaintOptions) -> TerrainEditResult,
+	fill: (shape: TerrainShape, options: TerrainFillOptions?) -> TerrainEditResult,
+
+	-- The same, from points (path options go in the same table)
+	raiseWithinPolygon: (points: TerrainPoints, options: TerrainRaiseOptions) -> TerrainEditResult,
+	lowerWithinPolygon: (points: TerrainPoints, options: TerrainRaiseOptions) -> TerrainEditResult,
+	flattenWithinPolygon: (points: TerrainPoints, options: TerrainFlattenOptions?) -> TerrainEditResult,
+	smoothWithinPolygon: (points: TerrainPoints, options: TerrainSmoothOptions?) -> TerrainEditResult,
+	paintWithinPolygon: (points: TerrainPoints, options: TerrainPaintOptions) -> TerrainEditResult,
+	fillWithinPolygon: (points: TerrainPoints, options: TerrainFillOptions?) -> TerrainEditResult,
+	raiseAlongPath: (points: TerrainPoints, options: TerrainRaiseOptions & TerrainPathOptions) -> TerrainEditResult,
+	lowerAlongPath: (points: TerrainPoints, options: TerrainRaiseOptions & TerrainPathOptions) -> TerrainEditResult,
+	flattenAlongPath: (points: TerrainPoints, options: (TerrainFlattenOptions & TerrainPathOptions)?) -> TerrainEditResult,
+	smoothAlongPath: (points: TerrainPoints, options: (TerrainSmoothOptions & TerrainPathOptions)?) -> TerrainEditResult,
+	paintAlongPath: (points: TerrainPoints, options: TerrainPaintOptions & TerrainPathOptions) -> TerrainEditResult,
+	fillAlongPath: (points: TerrainPoints, options: (TerrainFillOptions & TerrainPathOptions)?) -> TerrainEditResult,
+}
+
 -- The SDK module itself.
 export type SDK = {
 	API_VERSION: number,
@@ -571,6 +821,7 @@ export type SDK = {
 	Maid: { new: () -> Maid },
 	Signal: { new: () -> Signal },
 	ViewportStyle: ViewportStyle,
+	Terrain: TerrainLibrary,
 }
 
 -- Pack metadata from toolpack.json, as delivered by the server.

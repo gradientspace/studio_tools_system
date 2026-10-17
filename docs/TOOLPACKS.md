@@ -97,6 +97,7 @@ Commit `SDK.luau` in the pack's repo. `npm run check` warns when it's missing or
 | `SDK.SingleClickInputBehavior`, `SDK.ClickDragInputBehavior`, `SDK.ClickOrDragInputBehavior`, `SDK.HoverInputBehavior` | The standard input behaviors |
 | `SDK.CaptureState` | Values returned by input behavior methods |
 | `SDK.Maid`, `SDK.Signal` | Cleanup and event utilities |
+| `SDK.Terrain` | Higher-level terrain edits: height fields, raise/lower/flatten/smooth/paint/fill over polygons and paths (see Terrain) |
 | `SDK.ToolContext`, `SDK.ToolDefinition`, `SDK.SettingSchema`, ... | Exported types (`SDK/Types.luau`) |
 
 Anything under `StudioTools.System` is internal; don't require it from a pack.
@@ -493,6 +494,48 @@ end
 - **Lifetime.** A request outlives the tool that sent it, so a tool can send one when it's accepted. Pass `{ cancelOnDeactivate = true }` to cancel it when the tool deactivates instead. Requests also survive hot reloads, but not a restart of the dev server: they then fail.
 - **Prompts.** The agent is told that the prompt comes from a tool, that it should act on the place through MCP rather than edit code, and that its final reply goes back to the tool. Include what it needs to find things, such as `instance:GetFullName()`. If the tool needs to parse the reply, ask for an exact format ("Reply with only the new part's full name").
 - **Failures.** A request fails with an `error` when the agent isn't available, the server can't be reached, or the agent hits an error. Changes the agent makes through MCP aren't part of the tool's undo recordings.
+
+## Terrain
+
+`SDK.Terrain` is a library of higher-level edits of the place's smooth terrain, for tools that shape terrain procedurally from user input (a drawn polygon, a clicked path, a brush stroke). It works on **voxel columns** (4 × 4 studs) and their **surface height**, the top of the topmost solid terrain in the column. Every option is documented in the `Terrain*` types in `SDK.luau`.
+
+```lua
+local Terrain = SDK.Terrain
+
+ctx:recordUndo("Raise Hill", function()
+	-- a hill over the polygon, peaking in its middle, capped into a mesa
+	Terrain.raiseWithinPolygon(points, { height = 60, maxHeight = 20, falloff = "smooth" })
+	-- a river: carve along the path, then fill with water up to the banks
+	Terrain.lowerAlongPath(riverPoints, { height = 10, radius = 6, falloffWidth = 12, widthScale = { 0.5, 2 } })
+	Terrain.fillAlongPath(riverPoints, { radius = 12, level = 0 })
+end)
+```
+
+The edits don't record undo (call them inside `ctx:recordUndo` / `ctx:beginUndo`) and don't yield unless `yield = true` is passed, so a small edit can run from an input behavior callback; a brush-sized edit takes a few milliseconds. Each returns `{ columns, region, heights?, snapshot? }`: how many columns changed, the voxel region written, with `returnHeights` (or `dryRun`, which computes without writing, e.g. for a preview) the new surface heights, and with `snapshot = true` a copy of the voxels it changed: `Terrain.restore(snapshot)` puts them back, so a tool can redo an edit with new settings (the core pack's terrain curve tools do this).
+
+**Shapes.** `Terrain.polygon(points)` is an area; `Terrain.path(points, { closed?, radius?, widthScale?, heightScale? })` is a stroke along a polyline (one point makes a dot, i.e. a round brush). Points are `Vector3`s, or `Vector2`s as (X, Z); a path made of `Vector3`s has a height along it, which `flatten` and `fill` use by default and the other edits use with `base = "path"`. Every shape edit takes either kind (`Terrain.raise(shape, options)`), and there are shortcuts that take the points (`raiseWithinPolygon`, `raiseAlongPath`, ...; path options go in the same table). `widthScale` and `heightScale` vary a path along its length: one value per point is interpolated along each segment; any other count is spread evenly by arc length, so two values go from start to end. `Terrain.circle` and `Terrain.smoothPath` (Chaikin corner rounding) help make points.
+
+**Falloff.** A shape covers each column by its distance to the shape: the ramp is `falloffWidth` studs wide and runs inward from a polygon's edge (`falloffAlign = "inside"`; the default width then reaches the middle of the polygon), or outward from a path's radius (`"outside"`), or across the edge (`"center"`). `falloff` shapes the ramp: `"linear"`, `"square"`, `"sqrt"`, `"smoothstep"`, `"round"`, `"constant"`, a function, or `"smooth"`, which also blurs the distance field (`smoothing`, in studs, can be set for any falloff) so the ridges and peak of a polygon's distance field and sharp corners are rounded.
+
+| Edit | What it does |
+| --- | --- |
+| `combineWithHeightField(field, options)` | Interpolates a grid of heights (`{ min, max, values[i][j], weights? }`, cubic or linear) at each column and combines it with the surface by `mode`: `replace`, `max`, `min`, `stamp` (adds `value * multiplier`), `blend` / `blendMin` (smooth max / min within `blendRadius`). `edgeFalloff` fades it out toward the field's edges. |
+| `raise` / `lower` | Raises (lowers) by `height` × the falloff weight (× the path's `heightScale`), at most `maxHeight` (a flat top). `mode = "stamp"` (default) follows the terrain; the other modes combine `base ± that` with it, with `base` a height, `"path"`, or measured around the shape (`"boundaryMin"`, `"boundaryMean"`, `"boundaryMax"`). |
+| `flatten` | Moves the surface to `level` (default: the path's height, else the mean height around the shape), blending out over the falloff. |
+| `smooth` | Blurs the surface heights (`radius`), weighted by the falloff. |
+| `paint` | Sets the material of the solid voxels within `depth` of the surface; can scatter the edge (`dither`), and be limited to `onlyMaterials` and to a slope range (`minSlope`, `maxSlope`, degrees). |
+| `fill` | Fills the air above the surface up to `level` (default: the path's height, else the lowest point around the shape, so a basin fills to its rim) with `material`: Water (the default) goes in the liquid channel, so it fills around partial voxels; Air drains water. |
+| `modifyHeights(min, max, fn)` | Moves each column's surface to `fn(x, z, height)`, for any height function. |
+| `modifyVoxels(region, fn)` | Calls `fn(position, material, solid, liquid)` for every voxel and writes what it returns. |
+| `surfaceHeight(x, z)`, `readHeightField(min, max)`, `sampleHeightField(field, x, z)` | Reading surface heights, e.g. for previews or to edit them and write them back with `combineWithHeightField`. |
+
+How heights are written:
+- **Raising** fills from just below the old surface up to the new one, with `material` or else the surface's own material, so caves below stay.
+- **Lowering** pushes the top of the terrain down instead of cutting it. The terrain from the surface down to `pushDepth` (8) moves down rigidly, and the band of `compressionDepth` (16, at least 1.25× the drop) below it is squeezed, so a thin layer (a bridge, a ledge) sinks instead of being cut through. On solid ground it's the same as cutting. `pushDepth = 0, compressionDepth = 0` cuts instead.
+- **Empty columns.** A column with no terrain counts as having its surface at `emptyHeight` (0), so raising there builds terrain up from that height.
+- **Searching.** Surfaces are searched for between `searchMinY` (-1024) and `searchMaxY` (2048).
+
+Terrain heights follow the mesher's rule (measured in Studio, and what `Terrain:FillBlock` writes): a column whose topmost solid voxel is centered at `c` with occupancy `o`, over full voxels, has its surface at `c + 4o`.
 
 ## Rules for pack code
 

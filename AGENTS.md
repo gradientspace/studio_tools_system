@@ -8,7 +8,7 @@ You can't see or operate Studio. Your feedback comes from `npm run check` (stati
 
 | Path | What | Changes reach Studio by |
 | --- | --- | --- |
-| `studio_plugin_src/SDK/` | Public, versioned API for tool packs (`Tool` base class, `Types.luau`, `Maid`, `Signal`) | hot reload |
+| `studio_plugin_src/SDK/` | Public, versioned API for tool packs (`Tool` base class, `Types.luau`, `Maid`, `Signal`, the `Terrain` editing library) | hot reload |
 | `studio_plugin_src/System/` | Framework internals: entry point, `ToolManager`, `ToolContext`, `Palette` UI, settings | hot reload |
 | `toolpacks/core/` | Built-in tool pack; the reference for how packs are written | hot reload |
 | `toolpacks.json` | Packs everyone gets (committed) | hot reload |

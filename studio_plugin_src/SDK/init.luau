@@ -20,6 +20,7 @@ local SingleClickInputBehavior = require(script.Input.SingleClickInputBehavior)
 local ClickDragInputBehavior = require(script.Input.ClickDragInputBehavior)
 local ClickOrDragInputBehavior = require(script.Input.ClickOrDragInputBehavior)
 local HoverInputBehavior = require(script.Input.HoverInputBehavior)
+local Terrain = require(script.Terrain)
 
 export type SettingSchema = Types.SettingSchema
 export type SettingExtendedOptions = Types.SettingExtendedOptions
@@ -64,6 +65,26 @@ export type SettingState = Types.SettingState
 export type ViewportPanelPosition = Types.ViewportPanelPosition
 export type ViewportPanelOptions = Types.ViewportPanelOptions
 export type ViewportStyle = Types.ViewportStyle
+export type TerrainFalloff = Types.TerrainFalloff
+export type TerrainCombineMode = Types.TerrainCombineMode
+export type TerrainBase = Types.TerrainBase
+export type TerrainHeightField = Types.TerrainHeightField
+export type TerrainShape = Types.TerrainShape
+export type TerrainPoints = Types.TerrainPoints
+export type TerrainPathOptions = Types.TerrainPathOptions
+export type TerrainEditOptions = Types.TerrainEditOptions
+export type TerrainHeightWriteOptions = Types.TerrainHeightWriteOptions
+export type TerrainShapeFalloffOptions = Types.TerrainShapeFalloffOptions
+export type TerrainRaiseOptions = Types.TerrainRaiseOptions
+export type TerrainFlattenOptions = Types.TerrainFlattenOptions
+export type TerrainSmoothOptions = Types.TerrainSmoothOptions
+export type TerrainPaintOptions = Types.TerrainPaintOptions
+export type TerrainFillOptions = Types.TerrainFillOptions
+export type TerrainHeightFieldOptions = Types.TerrainHeightFieldOptions
+export type TerrainEditResult = Types.TerrainEditResult
+export type TerrainSnapshot = Types.TerrainSnapshot
+export type TerrainVoxelFunction = Types.TerrainVoxelFunction
+export type TerrainLibrary = Types.TerrainLibrary
 
 -- Bumped on breaking changes to the tool/pack contract. (server/sdk.js reads
 -- this line when generating pack SDK files, so keep the format.)
@@ -110,6 +131,8 @@ local SDK = {
 	Signal = Signal,
 	-- Colors and sizes of the system's viewport UI (see ctx:createViewportPanel).
 	ViewportStyle = ViewportStyle,
+	-- Higher-level terrain edits (see Terrain/init.luau).
+	Terrain = Terrain,
 }
 
 function SDK.isApiVersionSupported(apiVersion: any): boolean
